@@ -7,6 +7,8 @@ import config
 import guards
 import page_actions
 from browser import persistent_chrome
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 from exit_codes import ExitCode
 
 
@@ -64,6 +66,15 @@ def cmd_check(log: logging.Logger, dump_name: str | None) -> ExitCode:
         log.info("alvo: %s", config.APP_URL)
         page_actions.goto_app(page)
         page_actions.settle(page)
+        try:
+            page_actions.wait_app_ready(page)
+        except PlaywrightTimeoutError:
+            log.error("app nao ficou pronta em %dms (body continua .x-masked)",
+                      config.APP_READY_TIMEOUT_MS)
+            if dump_name:
+                html, png = page_actions.dump_state(page, f"{dump_name}-timeout")
+                log.info("dump: %s | %s", html, png)
+            return ExitCode.SANITY_FAILED
         url, title = page_actions.describe(page)
         log.info("url: %s", url)
         log.info("titulo: %s", title)
@@ -89,6 +100,10 @@ def cmd_dump(log: logging.Logger, dump_name: str) -> ExitCode:
     with persistent_chrome() as (_, page):
         page_actions.goto_app(page)
         page_actions.settle(page)
+        try:
+            page_actions.wait_app_ready(page)
+        except PlaywrightTimeoutError:
+            log.warning("app nao ficou pronta - capturando mesmo assim")
         log.info("url: %s", page.url)
         print("")
         print("=" * 70)

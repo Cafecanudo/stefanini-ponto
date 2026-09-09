@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import Page
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 import config
 
@@ -17,17 +18,16 @@ def goto_app(page: Page) -> None:
 def settle(page: Page) -> None:
     try:
         page.wait_for_load_state("networkidle", timeout=config.SETTLE_TIMEOUT_MS)
-    except Exception:
+    except PlaywrightTimeoutError:
         pass
-    mask = config.SELECTORS.get("extjs_loading_mask")
-    if not mask:
-        return
-    try:
-        page.locator(f"{mask}:visible").last.wait_for(
-            state="hidden", timeout=config.SETTLE_TIMEOUT_MS
-        )
-    except Exception:
-        pass
+
+
+def wait_app_ready(page: Page) -> None:
+    page.wait_for_selector(
+        config.require_selector("app_ready"),
+        state="attached",
+        timeout=config.APP_READY_TIMEOUT_MS,
+    )
 
 
 def is_alive(page: Page) -> bool:
