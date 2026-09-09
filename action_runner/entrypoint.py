@@ -1,0 +1,371 @@
+import argparse
+import os
+import re
+import time
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
+
+BASE_DIR = Path(__file__).resolve().parent
+USER_DATA_DIR = BASE_DIR / "chrome_profile"
+TARGET_URL = "https://portalhoras.stefanini.com/"
+WINDOW_WIDTH = 1600
+WINDOW_HEIGHT = 1100
+SPI_GETWORKAREA = 0x0030
+
+NAV_TIMEOUT_MS = 60000
+ACTION_TIMEOUT_MS = 15000
+WAIT_LOGIN_WINDOW_MS = 1000
+MFA_TIMEOUT_MS = 60000
+POLL_INTERVAL_MS = 500
+CLICK_DELAY_MS = 1000
+APP_READY_TIMEOUT_MS = 0
+
+CONSENT_BUTTON = "text=Confirmar preferências"
+ENTER_PORTAL_BUTTON = 'input.btOK[lang="btLoginEntrar"]'
+LOGIN_EMAIL_PLACEHOLDER = "Email, telefone ou Skype"
+LOGIN_EMAIL_INPUT = (
+    'input[name="loginfmt"], '
+    f'input[placeholder="{LOGIN_EMAIL_PLACEHOLDER}"]'
+)
+LOGIN_PASSWORD_INPUT = 'input[type="password"][name="passwd"]'
+LOGIN_SUBMIT = 'input[type="submit"]'
+LOGIN_USER = "wsbarros1@latam.stefanini.com"
+LOGIN_PASSWORD_ENV = "PASS_STEFANINI"
+LOGIN_PASSWORD = os.environ.get(LOGIN_PASSWORD_ENV, "")
+ACCOUNT_TILE = (
+    f'[data-test-id="{LOGIN_USER}"], '
+    f'#tileList [role="button"]:has-text("{LOGIN_USER}")'
+)
+APP_URL_PATTERN = "**/main.html"
+APP_URL_MARK = "main.html"
+MFA_RETRY_METHOD = (
+    '#idDiv_SAOTCS_Proofs [role="button"][data-value="PhoneAppNotification"], '
+    '[role="button"]:has-text("Microsoft Authenticator")'
+)
+MFA_RETRY_LIMIT = 3
+KMSI_CHECKBOX = 'input[name="DontShowAgain"], #KmsiCheckboxField'
+KMSI_YES_BUTTON = 'input[type="submit"]#idSIButton9, input[type="submit"][value="Sim"]'
+WORKAREA_BUTTON = "a.sidebarButtons.workarea"
+DAILY_ENTRY_BUTTON = "text=Apontamento Diário"
+GRID_ROW = "tr.x-grid-row"
+GRID_ROW_DATE_CELL = "td"
+GRID_ROW_CHECKBOX = "div.x-grid-row-checker"
+CALC_BUTTON_ICON = "img201.png"
+CALC_BUTTON = f'a.toolbar-footer-button:has(span[style*="{CALC_BUTTON_ICON}"])'
+DIALOG_OK_BUTTON = (
+    '.x-message-box:visible '
+    'a[role="button"]:has(span.x-btn-inner:text-is("Ok"))'
+)
+WINDOW_CLOSE_BUTTON = (
+    '.x-window:not(.x-message-box):visible '
+    'div.x-tool[aria-label="Close panel"]'
+)
+HOME_BUTTON = "button.headerButtons.homeButton"
+CLOCK_BUTTON = "text=Relógio de Ponto Virtual"
+PUNCH_BUTTON = "text=Efetuar Marcação"
+
+OK_NOOP = 1
+
+MARK_PATTERN = re.compile(r"\b\d{2}:\d{2}\b")
+EXPECTED_WINDOWS = {
+    1: ("06:00", "09:15"),
+    2: ("12:45", "13:15"),
+    3: ("13:45", "14:35"),
+    4: ("17:45", "18:15"),
+}
+
+
+def wait_for_login_state(page) -> str:
+    alvos = (
+        ("tile", ACCOUNT_TILE),
+        ("email", LOGIN_EMAIL_INPUT),
+        ("password", LOGIN_PASSWORD_INPUT),
+    )
+    deadline = time.monotonic() + WAIT_LOGIN_WINDOW_MS / 1000
+    while True:
+        if APP_URL_MARK in page.url:
+            return "portal"
+        for nome, seletor in alvos:
+            try:
+                visivel = page.locator(seletor).first.is_visible()
+            except PlaywrightError:
+                visivel = False
+            if visivel:
+                return nome
+        if time.monotonic() >= deadline:
+            return "nenhum"
+        page.wait_for_timeout(POLL_INTERVAL_MS)
+
+
+def wait_for_kmsi_or_portal(page) -> str:
+    deadline = time.monotonic() + MFA_TIMEOUT_MS / 1000
+    kmsi = page.locator(KMSI_CHECKBOX).first
+    retry = page.locator(MFA_RETRY_METHOD).first
+    tentativas = 0
+    while time.monotonic() < deadline:
+        if APP_URL_MARK in page.url:
+            return "portal"
+        try:
+            kmsi_visivel = kmsi.is_visible()
+            retry_visivel = retry.is_visible()
+        except PlaywrightError:
+            kmsi_visivel = False
+            retry_visivel = False
+        if kmsi_visivel:
+            return "kmsi"
+        if retry_visivel:
+            if tentativas >= MFA_RETRY_LIMIT:
+                return "mfa_falhou"
+            tentativas += 1
+            print(f"MFA nao verificado - reenviando ({tentativas}/{MFA_RETRY_LIMIT})")
+            retry.click(timeout=ACTION_TIMEOUT_MS)
+            page.wait_for_timeout(CLICK_DELAY_MS)
+            continue
+        page.wait_for_timeout(POLL_INTERVAL_MS)
+    return "timeout"
+
+
+def bottom_right_position(width: int, height: int) -> tuple[int, int]:
+    if sys.platform != "win32":
+        print("posicionamento automatico disponivel apenas no Windows - usando 0,0")
+        return (0, 0)
+    import ctypes
+    from ctypes import wintypes
+
+    work_area = wintypes.RECT()
+    ok = ctypes.windll.user32.SystemParametersInfoW(
+        SPI_GETWORKAREA, 0, ctypes.byref(work_area), 0
+    )
+    if not ok:
+        print("SPI_GETWORKAREA falhou - usando 0,0")
+        return (0, 0)
+    return (max(0, work_area.right - width), max(0, work_area.bottom - height))
+
+
+def to_minutes(value: str) -> int:
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="entrypoint")
+    parser.add_argument(
+        "--current-exe",
+        "--current_exe",
+        dest="current_exe",
+        type=int,
+        choices=sorted(EXPECTED_WINDOWS),
+        required=True,
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    window_start, window_end = EXPECTED_WINDOWS[args.current_exe]
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    pos_x, pos_y = bottom_right_position(WINDOW_WIDTH, WINDOW_HEIGHT)
+    print(f"janela {WINDOW_WIDTH}x{WINDOW_HEIGHT} em {pos_x},{pos_y}")
+    with sync_playwright() as pw:
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=str(USER_DATA_DIR),
+            channel="chrome",
+            headless=False,
+            no_viewport=True,
+            args=[
+                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+                f"--window-position={pos_x},{pos_y}",
+            ],
+        )
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            print(f"aberto: {page.url}")
+            consent = page.locator(CONSENT_BUTTON).first
+            try:
+                page.wait_for_timeout(5000)
+
+                consent.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("banner de preferencias nao apareceu")
+            else:
+                consent.click()
+                print("preferencias confirmadas")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            enter_portal = page.locator(ENTER_PORTAL_BUTTON).first
+            try:
+                enter_portal.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("botao Entrar no Portal nao encontrado")
+            else:
+                enter_portal.click()
+                print(f"entrou no portal: {page.url}")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            estado_login = wait_for_login_state(page)
+            print(f"estado apos entrar no portal: {estado_login}")
+            if estado_login == "tile":
+                page.locator(ACCOUNT_TILE).first.click(timeout=ACTION_TIMEOUT_MS)
+                print(f"conta selecionada: {LOGIN_USER}")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+                estado_login = "password"
+            if estado_login == "email":
+                login_email = page.locator(LOGIN_EMAIL_INPUT).first
+                try:
+                    login_email.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    print("campo de email nao apareceu")
+                else:
+                    login_email.fill(LOGIN_USER)
+                    if login_email.input_value() != LOGIN_USER:
+                        login_email.fill("")
+                        login_email.click(timeout=ACTION_TIMEOUT_MS)
+                        login_email.press_sequentially(LOGIN_USER, delay=50)
+                    print(f"usuario informado: {login_email.input_value()}")
+                    page.locator(LOGIN_SUBMIT).first.click(timeout=ACTION_TIMEOUT_MS)
+                    page.wait_for_timeout(CLICK_DELAY_MS)
+                    estado_login = "password"
+            if estado_login == "password" and not LOGIN_PASSWORD:
+                print(f"{LOGIN_PASSWORD_ENV} nao definida - senha nao informada")
+                estado_login = "sem_senha"
+            if estado_login == "password":
+                login_password = page.locator(LOGIN_PASSWORD_INPUT).first
+                try:
+                    login_password.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    print("campo de senha nao apareceu")
+                else:
+                    login_password.fill(LOGIN_PASSWORD)
+                    page.locator(LOGIN_SUBMIT).first.click(timeout=ACTION_TIMEOUT_MS)
+                    page.wait_for_timeout(CLICK_DELAY_MS)
+                    espera = MFA_TIMEOUT_MS // 1000
+                    print(f"aguardando confirmacao manual do MFA (ate {espera}s)")
+                    estado = wait_for_kmsi_or_portal(page)
+                    if estado == "timeout":
+                        print("MFA nao confirmado dentro do prazo")
+                    elif estado == "mfa_falhou":
+                        print(f"MFA falhou apos {MFA_RETRY_LIMIT} reenvios")
+                    elif estado == "portal":
+                        print(f"MFA confirmado - ja no portal: {page.url}")
+                    else:
+                        print("MFA confirmado - tela Continuar conectado")
+                        page.locator(KMSI_CHECKBOX).first.check(timeout=ACTION_TIMEOUT_MS)
+                        print("marcado: nao mostrar isso novamente")
+                        page.wait_for_timeout(CLICK_DELAY_MS)
+                        page.locator(KMSI_YES_BUTTON).first.click(timeout=ACTION_TIMEOUT_MS)
+                        print("continuar conectado: Sim")
+                        page.wait_for_timeout(CLICK_DELAY_MS)
+                        try:
+                            page.wait_for_url(APP_URL_PATTERN, timeout=NAV_TIMEOUT_MS)
+                        except PlaywrightTimeoutError:
+                            print("nao voltou ao portal apos Continuar conectado")
+                        else:
+                            print(f"de volta no portal: {page.url}")
+            workarea = page.locator(WORKAREA_BUTTON).first
+            try:
+                workarea.wait_for(state="visible", timeout=APP_READY_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("app nao carregou ou botao WorkArea nao encontrado")
+            else:
+                workarea.click(timeout=ACTION_TIMEOUT_MS)
+                print("workarea aberta")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            daily_entry = page.locator(DAILY_ENTRY_BUTTON).first
+            try:
+                daily_entry.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("Apontamento Diario nao encontrado")
+            else:
+                daily_entry.click(timeout=ACTION_TIMEOUT_MS)
+                print("apontamento diario aberto")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            today = datetime.now().strftime("%d/%m")
+            today_row = page.locator(GRID_ROW).filter(
+                has=page.locator(GRID_ROW_DATE_CELL, has_text=re.compile(rf"^{today}\s"))
+            )
+            checkbox = today_row.locator(GRID_ROW_CHECKBOX).first
+            try:
+                checkbox.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print(f"linha de hoje ({today}) nao encontrada na grid")
+            else:
+                checkbox.click(timeout=ACTION_TIMEOUT_MS)
+                print(f"checkbox marcado para {today}")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            calc = page.locator(CALC_BUTTON).first
+            try:
+                calc.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("botao Calcular dias selecionados nao encontrado")
+            else:
+                calc.click(timeout=ACTION_TIMEOUT_MS)
+                print("calculo disparado")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            dialog_ok = page.locator(DIALOG_OK_BUTTON).first
+            try:
+                dialog_ok.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("dialog de confirmacao nao apareceu")
+            else:
+                dialog_ok.click(timeout=ACTION_TIMEOUT_MS)
+                print("dialog confirmado")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            window_close = page.locator(WINDOW_CLOSE_BUTTON).first
+            try:
+                window_close.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("botao close da janela nao encontrado")
+            else:
+                window_close.click(timeout=ACTION_TIMEOUT_MS)
+                print("janela fechada")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            marks = MARK_PATTERN.findall(today_row.inner_text())
+            print(f"execucao {args.current_exe}: janela {window_start}-{window_end}")
+            print(f"marcacoes de {today}: {marks or 'nenhuma'}")
+            found = [
+                mark
+                for mark in marks
+                if to_minutes(window_start) <= to_minutes(mark) <= to_minutes(window_end)
+            ]
+            if found:
+                print(f"marcacao ja existe na janela: {found[0]}")
+                return OK_NOOP
+            print("nenhuma marcacao na janela - voltando para a tela inicial")
+            home = page.locator(HOME_BUTTON).first
+            try:
+                home.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("botao Voltar a tela inicial nao encontrado")
+            else:
+                home.click(timeout=ACTION_TIMEOUT_MS)
+                print("de volta na tela inicial")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            clock = page.locator(CLOCK_BUTTON).first
+            try:
+                clock.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("Relogio de Ponto Virtual nao encontrado")
+            else:
+                clock.click(timeout=ACTION_TIMEOUT_MS)
+                print("relogio de ponto virtual aberto")
+                page.wait_for_timeout(CLICK_DELAY_MS)
+            punch = page.locator(PUNCH_BUTTON).first
+            try:
+                punch.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                print("botao Efetuar Marcacao nao encontrado")
+            else:
+                # punch.click(timeout=ACTION_TIMEOUT_MS)
+                print("marcacao efetuada")
+            input("ENTER para fechar > ")
+        finally:
+            context.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
