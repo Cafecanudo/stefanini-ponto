@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+
+_mapeamento/
+action_runner/logs/
+action_runner/traces/
+action_runner/.lock
+chrome_profile/
+.env
