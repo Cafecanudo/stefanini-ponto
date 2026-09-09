@@ -1,0 +1,71 @@
+import os
+from pathlib import Path
+
+BASE_DIR: Path = Path(__file__).resolve().parent
+PROJECT_DIR: Path = BASE_DIR.parent
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} deve ser inteiro, recebido: {raw!r}") from exc
+
+
+def _env_path(name: str, default: Path) -> Path:
+    raw = os.environ.get(name)
+    return Path(raw).expanduser().resolve() if raw else default
+
+
+TARGET_URL: str = os.environ.get("TARGET_URL", "https://portalhoras.stefanini.com/main.html")
+CHROME_CHANNEL: str = os.environ.get("CHROME_CHANNEL", "chrome")
+
+USER_DATA_DIR: Path = _env_path("USER_DATA_DIR", BASE_DIR / "chrome_profile")
+LOCK_PATH: Path = _env_path("LOCK_PATH", BASE_DIR / "run.lock")
+LOGS_DIR: Path = _env_path("LOGS_DIR", BASE_DIR / "logs")
+TRACES_DIR: Path = _env_path("TRACES_DIR", BASE_DIR / "traces")
+DUMP_DIR: Path = _env_path("DUMP_DIR", PROJECT_DIR / "_mapeamento")
+
+HEADLESS: bool = _env_bool("HEADLESS", False)
+DRY_RUN: bool = _env_bool("DRY_RUN", True)
+
+NAV_TIMEOUT_MS: int = _env_int("NAV_TIMEOUT_MS", 60000)
+ACTION_TIMEOUT_MS: int = _env_int("ACTION_TIMEOUT_MS", 15000)
+SETTLE_TIMEOUT_MS: int = _env_int("SETTLE_TIMEOUT_MS", 20000)
+
+LOGIN_URL_MARKERS: tuple[str, ...] = (
+    "login.microsoftonline.com",
+    "login.live.com",
+    "sts.stefanini.com",
+    "adfs",
+)
+
+SELECTORS: dict[str, str | None] = {
+    "page_anchor": None,
+    "login_anchor": None,
+    "record_present": None,
+    "record_absent": None,
+    "action_button": None,
+    "post_click_anchor": None,
+    "modal_ok_button": "a[role=button]:has-text('Ok')",
+    "extjs_loading_mask": ".x-mask",
+}
+
+
+def require_selector(key: str) -> str:
+    value = SELECTORS.get(key)
+    if not value:
+        raise RuntimeError(
+            f"Seletor '{key}' nao mapeado. Fase 0 incompleta - preencha SELECTORS em config.py."
+        )
+    return value
