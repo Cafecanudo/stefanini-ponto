@@ -13,6 +13,9 @@ from playwright.sync_api import sync_playwright
 BASE_DIR = Path(__file__).resolve().parent
 USER_DATA_DIR = BASE_DIR / "chrome_profile"
 LOGS_DIR = BASE_DIR / "logs"
+EVIDENCE_DIR = BASE_DIR / "evidencias"
+EVIDENCE_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
+EVIDENCE_QUALITY = 80
 LOG_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
 LOG_LINE_FORMAT = "%H:%M:%S"
 TARGET_URL = "https://portalhoras.stefanini.com/"
@@ -72,6 +75,8 @@ WINDOW_CLOSE_BUTTON = (
 HOME_BUTTON = "button.headerButtons.homeButton"
 CLOCK_BUTTON = "text=Relógio de Ponto Virtual"
 PUNCH_BUTTON = "text=Efetuar Marcação"
+PUNCH_CONFIRMATION = "text=MARCACAO EFETUADA"
+PUNCH_SETTLE_MS = 5000
 
 OK_NOOP = 1
 INTERRUPTED = 130
@@ -176,6 +181,18 @@ def log(mensagem: str) -> None:
     print(linha)
     if LOG_HANDLE is not None:
         print(linha, file=LOG_HANDLE, flush=True)
+
+
+def save_evidence(page, situacao: str) -> None:
+    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    nome = f"{situacao}-{datetime.now().strftime(EVIDENCE_NAME_FORMAT)}.jpg"
+    caminho = EVIDENCE_DIR / nome
+    try:
+        page.screenshot(path=str(caminho), type="jpeg", quality=EVIDENCE_QUALITY)
+    except PlaywrightError as exc:
+        log(f"falha ao salvar evidencia {nome}: {exc}")
+        return
+    log(f"evidencia: {caminho}")
 
 
 def missing_env_vars() -> list[str]:
@@ -290,7 +307,7 @@ def main() -> int:
             log(f"aberto: {page.url}")
             consent = page.locator(CONSENT_BUTTON).first
             try:
-                page.wait_for_timeout(5000)
+                page.wait_for_timeout(10000)
 
                 consent.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
@@ -304,6 +321,7 @@ def main() -> int:
                 enter_portal.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("botao Entrar no Portal nao encontrado")
+                save_evidence(page, "erro-entrar-portal")
             else:
                 enter_portal.click()
                 log(f"entrou no portal: {page.url}")
@@ -324,6 +342,7 @@ def main() -> int:
                     login_email.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
                     log("campo de email nao apareceu")
+                    save_evidence(page, "erro-campo-email")
                 else:
                     login_email.fill(LOGIN_USER)
                     if login_email.input_value() != LOGIN_USER:
@@ -343,6 +362,7 @@ def main() -> int:
                     login_password.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
                     log("campo de senha nao apareceu")
+                    save_evidence(page, "erro-campo-senha")
                 else:
                     login_password.fill(LOGIN_PASSWORD)
                     page.locator(LOGIN_SUBMIT).first.click(timeout=ACTION_TIMEOUT_MS)
@@ -352,8 +372,10 @@ def main() -> int:
                     estado = wait_for_kmsi_or_portal(page)
                     if estado == "timeout":
                         log("MFA nao confirmado dentro do prazo")
+                        save_evidence(page, "erro-mfa-timeout")
                     elif estado == "mfa_falhou":
                         log(f"MFA falhou apos {MFA_RETRY_LIMIT} reenvios")
+                        save_evidence(page, "erro-mfa-reenvios")
                     elif estado == "portal":
                         log(f"MFA confirmado - ja no portal: {page.url}")
                     else:
@@ -368,6 +390,7 @@ def main() -> int:
                             page.wait_for_url(APP_URL_PATTERN, timeout=NAV_TIMEOUT_MS)
                         except PlaywrightTimeoutError:
                             log("nao voltou ao portal apos Continuar conectado")
+                            save_evidence(page, "erro-kmsi")
                         else:
                             log(f"de volta no portal: {page.url}")
             workarea = page.locator(WORKAREA_BUTTON).first
@@ -375,6 +398,7 @@ def main() -> int:
                 workarea.wait_for(state="visible", timeout=APP_READY_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("app nao carregou ou botao WorkArea nao encontrado")
+                save_evidence(page, "erro-workarea")
             else:
                 workarea.click(timeout=ACTION_TIMEOUT_MS)
                 log("workarea aberta")
@@ -384,6 +408,7 @@ def main() -> int:
                 daily_entry.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("Apontamento Diario nao encontrado")
+                save_evidence(page, "erro-apontamento-diario")
             else:
                 daily_entry.click(timeout=ACTION_TIMEOUT_MS)
                 log("apontamento diario aberto")
@@ -397,6 +422,7 @@ def main() -> int:
                 checkbox.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log(f"linha de hoje ({today}) nao encontrada na grid")
+                save_evidence(page, "erro-linha-do-dia")
             else:
                 checkbox.click(timeout=ACTION_TIMEOUT_MS)
                 log(f"checkbox marcado para {today}")
@@ -406,6 +432,7 @@ def main() -> int:
                 calc.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("botao Calcular dias selecionados nao encontrado")
+                save_evidence(page, "erro-calcular-dias")
             else:
                 calc.click(timeout=ACTION_TIMEOUT_MS)
                 log("calculo disparado")
@@ -415,6 +442,7 @@ def main() -> int:
                 dialog_ok.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("dialog de confirmacao nao apareceu")
+                save_evidence(page, "erro-dialog-confirmacao")
             else:
                 dialog_ok.click(timeout=ACTION_TIMEOUT_MS)
                 log("dialog confirmado")
@@ -424,6 +452,7 @@ def main() -> int:
                 window_close.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("botao close da janela nao encontrado")
+                save_evidence(page, "erro-fechar-janela")
             else:
                 window_close.click(timeout=ACTION_TIMEOUT_MS)
                 log("janela fechada")
@@ -445,6 +474,7 @@ def main() -> int:
                 home.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("botao Voltar a tela inicial nao encontrado")
+                save_evidence(page, "erro-tela-inicial")
             else:
                 home.click(timeout=ACTION_TIMEOUT_MS)
                 log("de volta na tela inicial")
@@ -454,6 +484,7 @@ def main() -> int:
                 clock.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("Relogio de Ponto Virtual nao encontrado")
+                save_evidence(page, "erro-relogio-ponto")
             else:
                 clock.click(timeout=ACTION_TIMEOUT_MS)
                 log("relogio de ponto virtual aberto")
@@ -463,10 +494,22 @@ def main() -> int:
                 punch.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("botao Efetuar Marcacao nao encontrado")
+                save_evidence(page, "erro-efetuar-marcacao")
             else:
-                # punch.click(timeout=ACTION_TIMEOUT_MS)
-                log("marcacao efetuada")
-            input("ENTER para fechar > ")
+                punch.click(timeout=ACTION_TIMEOUT_MS)
+                log("marcacao enviada - aguardando confirmacao")
+                confirmacao = page.locator(PUNCH_CONFIRMATION).first
+                try:
+                    confirmacao.wait_for(
+                        state="visible", timeout=ACTION_TIMEOUT_MS
+                    )
+                except PlaywrightTimeoutError:
+                    log("confirmacao da marcacao nao apareceu")
+                    save_evidence(page, "erro-confirmacao-marcacao")
+                else:
+                    log(confirmacao.inner_text())
+                    page.wait_for_timeout(PUNCH_SETTLE_MS)
+                    save_evidence(page, "success")
         finally:
             try:
                 context.close()
