@@ -29,7 +29,7 @@ def _env_path(name: str, default: Path) -> Path:
 
 TARGET_URL: str = os.environ.get("TARGET_URL", "https://portalhoras.stefanini.com/")
 CHROME_CHANNEL: str = os.environ.get("CHROME_CHANNEL", "chrome")
-AUTH_SERVER_ALLOWLIST: str = os.environ.get("AUTH_SERVER_ALLOWLIST", "*.stefanini.com")
+AUTH_SERVER_ALLOWLIST: str = os.environ.get("AUTH_SERVER_ALLOWLIST", "")
 
 USER_DATA_DIR: Path = _env_path("USER_DATA_DIR", BASE_DIR / "chrome_profile")
 LOCK_PATH: Path = _env_path("LOCK_PATH", BASE_DIR / "run.lock")
