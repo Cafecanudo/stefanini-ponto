@@ -28,6 +28,7 @@ def _env_path(name: str, default: Path) -> Path:
 
 
 TARGET_URL: str = os.environ.get("TARGET_URL", "https://portalhoras.stefanini.com/")
+APP_URL: str = os.environ.get("APP_URL", "https://portalhoras.stefanini.com/main.html")
 CHROME_CHANNEL: str = os.environ.get("CHROME_CHANNEL", "chrome")
 AUTH_SERVER_ALLOWLIST: str = os.environ.get("AUTH_SERVER_ALLOWLIST", "")
 

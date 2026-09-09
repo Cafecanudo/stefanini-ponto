@@ -56,7 +56,8 @@ def cmd_login(log: logging.Logger) -> ExitCode:
 def cmd_check(log: logging.Logger, dump_name: str | None) -> ExitCode:
     with persistent_chrome() as (_, page):
         log.info("profile: %s", config.USER_DATA_DIR)
-        page_actions.goto_target(page)
+        log.info("alvo: %s", config.APP_URL)
+        page_actions.goto_app(page)
         page_actions.settle(page)
         log.info("url: %s", page.url)
         log.info("titulo: %s", page.title())
@@ -80,7 +81,7 @@ def cmd_check(log: logging.Logger, dump_name: str | None) -> ExitCode:
 
 def cmd_dump(log: logging.Logger, dump_name: str) -> ExitCode:
     with persistent_chrome() as (_, page):
-        page_actions.goto_target(page)
+        page_actions.goto_app(page)
         page_actions.settle(page)
         log.info("url: %s", page.url)
         print("")

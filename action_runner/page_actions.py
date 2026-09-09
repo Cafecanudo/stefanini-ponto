@@ -10,6 +10,10 @@ def goto_target(page: Page) -> None:
     page.goto(config.TARGET_URL, wait_until="domcontentloaded", timeout=config.NAV_TIMEOUT_MS)
 
 
+def goto_app(page: Page) -> None:
+    page.goto(config.APP_URL, wait_until="domcontentloaded", timeout=config.NAV_TIMEOUT_MS)
+
+
 def settle(page: Page) -> None:
     try:
         page.wait_for_load_state("networkidle", timeout=config.SETTLE_TIMEOUT_MS)
