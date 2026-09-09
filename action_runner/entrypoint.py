@@ -25,11 +25,11 @@ SPI_GETWORKAREA = 0x0030
 
 NAV_TIMEOUT_MS = 60000
 ACTION_TIMEOUT_MS = 15000
-WAIT_LOGIN_WINDOW_MS = 1000
+WAIT_LOGIN_WINDOW_MS = 8000
 MFA_TIMEOUT_MS = 60000
 POLL_INTERVAL_MS = 500
-CLICK_DELAY_MS = 1000
-APP_READY_TIMEOUT_MS = 0
+CLICK_DELAY_MS = 400
+APP_READY_TIMEOUT_MS = 60000
 
 CONSENT_BUTTON = "text=Confirmar preferências"
 ENTER_PORTAL_BUTTON = 'input.btOK[lang="btLoginEntrar"]'
@@ -79,6 +79,8 @@ PUNCH_CONFIRMATION = "text=MARCACAO EFETUADA"
 PUNCH_SETTLE_MS = 5000
 
 OK_NOOP = 1
+SANITY_FAILED = 20
+UNEXPECTED_ERROR = 40
 INTERRUPTED = 130
 
 MARK_PATTERN = re.compile(r"\b\d{2}:\d{2}\b")
@@ -185,7 +187,7 @@ def log(mensagem: str) -> None:
 
 def save_evidence(page, situacao: str) -> None:
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    nome = f"{situacao}-{datetime.now().strftime(EVIDENCE_NAME_FORMAT)}.jpg"
+    nome = f"{datetime.now().strftime(EVIDENCE_NAME_FORMAT)}-{situacao}.jpg"
     caminho = EVIDENCE_DIR / nome
     try:
         page.screenshot(path=str(caminho), type="jpeg", quality=EVIDENCE_QUALITY)
@@ -301,14 +303,13 @@ def main() -> int:
                 f"--window-position={pos_x},{pos_y}",
             ],
         )
+        page = None
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
             log(f"aberto: {page.url}")
             consent = page.locator(CONSENT_BUTTON).first
             try:
-                page.wait_for_timeout(10000)
-
                 consent.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 log("banner de preferencias nao apareceu")
@@ -353,6 +354,10 @@ def main() -> int:
                     page.locator(LOGIN_SUBMIT).first.click(timeout=ACTION_TIMEOUT_MS)
                     page.wait_for_timeout(CLICK_DELAY_MS)
                     estado_login = "password"
+            if estado_login in ("nenhum", "sem_usuario", "sem_senha"):
+                log(f"autenticacao impossivel - estado: {estado_login}")
+                save_evidence(page, "erro-login")
+                return SANITY_FAILED
             if estado_login == "password" and not LOGIN_PASSWORD:
                 log(f"{LOGIN_PASSWORD_ENV} nao definida - senha nao informada")
                 estado_login = "sem_senha"
@@ -399,6 +404,7 @@ def main() -> int:
             except PlaywrightTimeoutError:
                 log("app nao carregou ou botao WorkArea nao encontrado")
                 save_evidence(page, "erro-workarea")
+                return SANITY_FAILED
             else:
                 workarea.click(timeout=ACTION_TIMEOUT_MS)
                 log("workarea aberta")
@@ -510,6 +516,12 @@ def main() -> int:
                     log(confirmacao.inner_text())
                     page.wait_for_timeout(PUNCH_SETTLE_MS)
                     save_evidence(page, "success")
+        except Exception as exc:
+            detalhe = str(exc).splitlines()[0] if str(exc) else ""
+            log(f"erro nao previsto: {exc.__class__.__name__}: {detalhe}")
+            if page is not None:
+                save_evidence(page, "erro-inesperado")
+            return UNEXPECTED_ERROR
         finally:
             try:
                 context.close()
@@ -525,3 +537,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log("interrompido pelo usuario")
         sys.exit(INTERRUPTED)
+    except Exception as exc:
+        detalhe = str(exc).splitlines()[0] if str(exc) else ""
+        log(f"erro nao previsto: {exc.__class__.__name__}: {detalhe}")
+        sys.exit(UNEXPECTED_ERROR)

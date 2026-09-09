@@ -124,7 +124,7 @@ segue o caminho correspondente:
 | `tile` | tela "Escolha uma conta" → clica na conta de `USER_STEFANINI` |
 | `email` | tela "Entrar" → preenche e-mail → Avançar |
 | `password` | tela "Insira a senha" → preenche senha → Entrar |
-| `nenhum` | nada reconhecido, segue e falha adiante com mensagem própria |
+| `nenhum` | nada reconhecido → evidência `erro-login` e encerra com exit 20 |
 
 `tile` e `email` desembocam em `password`, então a etapa de senha não é duplicada.
 
@@ -148,12 +148,13 @@ e fora do versionamento.
 | 0 | — | Fim normal de qualquer outro caminho | implementado |
 | 0 | `OK_REGISTRED` | Marcação registrada e confirmada | pendente |
 | 10 | `SESSION_EXPIRED` | Login/MFA detectado | pendente |
-| 20 | `SANITY_FAILED` | Página inesperada / HTML mudou | pendente |
+| 20 | `SANITY_FAILED` | Não autenticou ou a app não carregou | implementado |
 | 30 | `LOCK_ACTIVE` | Outro run em execução | pendente |
-| 40 | `UNEXPECTED_ERROR` | Erro não previsto | pendente |
+| 40 | `UNEXPECTED_ERROR` | Erro não previsto | implementado |
 
-Hoje só `OK_NOOP` é emitido deliberadamente. Todos os outros desfechos — inclusive falhas —
-terminam em `0`. Um scheduler ainda não consegue distinguir sucesso de erro por exit code.
+`130` é emitido em `CTRL+C`. Qualquer exceção não prevista vira uma linha no log, uma
+evidência `erro-inesperado` e `exit 40` — nunca um traceback cru. Falhas de seletor no
+meio do fluxo continuam apenas registrando e seguindo, e o run termina em `0`.
 
 ## Seletores
 
@@ -182,15 +183,11 @@ seletor quebrar, a primeira verificação é se essa versão mudou.
 
 ## Limitações conhecidas
 
-1. **`punch.click()` está comentado.** O bloco imprime `marcacao efetuada` sem bater ponto.
-   Descomentar é o que ativa a ação real.
-2. **`input("ENTER para fechar")` no fim.** Em headless o processo fica parado esperando um
-   ENTER sem janela visível. Bloqueia uso agendado.
-3. **`APP_READY_TIMEOUT_MS = 0`** desabilita o timeout da espera do WorkArea — o Playwright
-   interpreta `0` como "sem limite". Se a app não carregar, o script espera indefinidamente.
-4. **Sem lock de execução.** Dois runs simultâneos operam sobre o mesmo profile do Chrome.
-5. **Sem trace, sem log em arquivo, sem screenshot.** Toda a saída é `print` no stdout.
-6. **A guarda de idempotência é a janela de horário.** Uma marcação fora dela — bateu 08:28
+1. **O script bate ponto de verdade.** Não há dry-run: rodar fora de uma janela já
+   preenchida registra a marcação.
+2. **Sem lock de execução.** Dois runs simultâneos operam sobre o mesmo profile do Chrome.
+3. **Sem trace do Playwright.** Há log e screenshot, mas não o replay visual do run.
+4. **A guarda de idempotência é a janela de horário.** Uma marcação fora dela — bateu 08:28
    com a janela começando 08:45 — é lida como ausente, e o script bate de novo. A dupla
    verificação imediatamente antes do clique, prevista na spec, não existe: há dois cliques
    e uma navegação entre a leitura e a ação.
