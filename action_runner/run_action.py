@@ -121,6 +121,40 @@ def cmd_dump(log: logging.Logger, dump_name: str) -> ExitCode:
         return ExitCode.OK_NOOP
 
 
+def cmd_nav(log: logging.Logger, until: str | None, dump_name: str) -> ExitCode:
+    with persistent_chrome() as (_, page):
+        log.info("alvo: %s", config.APP_URL)
+        page_actions.goto_app(page)
+        page_actions.settle(page)
+        page_actions.wait_app_ready(page)
+
+        if guards.is_login_screen(page):
+            log.error("nao autenticado")
+            return ExitCode.SESSION_EXPIRED
+
+        for name, selector_key in config.NAV_STEPS:
+            selector = config.require_selector(selector_key)
+            log.info("step '%s' -> %s", name, selector)
+            found = page.locator(selector).count()
+            if found == 0:
+                log.error("step '%s': seletor nao encontrado no DOM", name)
+                html, png = page_actions.dump_state(page, f"{dump_name}-falha-{name}")
+                log.info("dump: %s | %s", html, png)
+                return ExitCode.SANITY_FAILED
+            if found > 1:
+                log.warning("step '%s': %d elementos casam, usando o primeiro", name, found)
+            page_actions.click_step(page, selector)
+            page_actions.settle(page)
+            page_actions.wait_app_ready(page)
+            log.info("step '%s' concluido", name)
+            if until and name == until:
+                break
+
+        html, png = page_actions.dump_state(page, dump_name)
+        log.info("dump: %s | %s", html, png)
+        return ExitCode.OK_NOOP
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="run_action")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -129,6 +163,9 @@ def main() -> int:
     check.add_argument("--dump", dest="dump", default=None, metavar="NOME")
     dump = sub.add_parser("dump", help="captura DOM e screenshot do estado atual")
     dump.add_argument("nome", help="nome do arquivo em _mapeamento")
+    nav = sub.add_parser("nav", help="executa NAV_STEPS e captura o resultado")
+    nav.add_argument("nome", help="nome do arquivo em _mapeamento")
+    nav.add_argument("--until", dest="until", default=None, metavar="STEP")
 
     args = parser.parse_args()
     log = _setup_logging()
@@ -138,11 +175,16 @@ def main() -> int:
             code = cmd_login(log)
         elif args.command == "check":
             code = cmd_check(log, args.dump)
+        elif args.command == "nav":
+            code = cmd_nav(log, args.until, args.nome)
         else:
             code = cmd_dump(log, args.nome)
     except KeyboardInterrupt:
         log.warning("interrompido pelo usuario")
         code = ExitCode.UNEXPECTED_ERROR
+    except PlaywrightTimeoutError as exc:
+        log.error("timeout: %s", str(exc).splitlines()[0])
+        code = ExitCode.SANITY_FAILED
     except Exception:
         log.exception("erro nao previsto")
         code = ExitCode.UNEXPECTED_ERROR

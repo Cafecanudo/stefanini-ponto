@@ -30,6 +30,12 @@ def wait_app_ready(page: Page) -> None:
     )
 
 
+def click_step(page: Page, selector: str) -> None:
+    locator = page.locator(selector)
+    locator.first.wait_for(state="visible", timeout=config.ACTION_TIMEOUT_MS)
+    locator.first.click()
+
+
 def is_alive(page: Page) -> bool:
     if page.is_closed():
         return False

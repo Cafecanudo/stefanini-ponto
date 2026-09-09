@@ -66,8 +66,14 @@ SELECTORS: dict[str, str | None] = {
     "lgpd_modal": ".x-window:visible",
     "lgpd_accept_button": ".x-window:visible a.btnPrimary[role=button]",
     "app_ready": "body:not(.x-masked)",
+    "sidebar_workarea": "a.sidebarButtons.workarea",
     "app_loading_mask": ".x-mask-msg.loading",
 }
+
+
+NAV_STEPS: list[tuple[str, str]] = [
+    ("workarea", "sidebar_workarea"),
+]
 
 
 def require_selector(key: str) -> str:
