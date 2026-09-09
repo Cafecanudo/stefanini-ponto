@@ -7,7 +7,10 @@ import config
 
 
 def _launch_args() -> list[str]:
-    args = ["--start-maximized"]
+    args = [
+        f"--window-size={config.WINDOW_WIDTH},{config.WINDOW_HEIGHT}",
+        f"--window-position={config.WINDOW_X},{config.WINDOW_Y}",
+    ]
     if config.AUTH_SERVER_ALLOWLIST:
         args.append(f"--auth-server-allowlist={config.AUTH_SERVER_ALLOWLIST}")
         args.append(f"--auth-negotiate-delegate-allowlist={config.AUTH_SERVER_ALLOWLIST}")

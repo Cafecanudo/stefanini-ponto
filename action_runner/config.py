@@ -39,6 +39,10 @@ TRACES_DIR: Path = _env_path("TRACES_DIR", BASE_DIR / "traces")
 DUMP_DIR: Path = _env_path("DUMP_DIR", PROJECT_DIR / "_mapeamento")
 
 HEADLESS: bool = _env_bool("HEADLESS", False)
+WINDOW_WIDTH: int = _env_int("WINDOW_WIDTH", 1600)
+WINDOW_HEIGHT: int = _env_int("WINDOW_HEIGHT", 1050)
+WINDOW_X: int = _env_int("WINDOW_X", 0)
+WINDOW_Y: int = _env_int("WINDOW_Y", 0)
 DRY_RUN: bool = _env_bool("DRY_RUN", True)
 
 NAV_TIMEOUT_MS: int = _env_int("NAV_TIMEOUT_MS", 60000)

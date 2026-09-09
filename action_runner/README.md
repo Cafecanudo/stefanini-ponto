@@ -81,11 +81,23 @@ convenção padrão sem wrapper de tradução.
 | `TRACES_DIR` | `action_runner/traces` |
 | `DUMP_DIR` | `_mapeamento` |
 | `HEADLESS` | `false` |
+| `WINDOW_WIDTH` | `1600` |
+| `WINDOW_HEIGHT` | `1050` |
+| `WINDOW_X` | `0` |
+| `WINDOW_Y` | `0` |
 | `DRY_RUN` | `true` |
 | `NAV_TIMEOUT_MS` | `60000` |
 | `ACTION_TIMEOUT_MS` | `15000` |
 | `SETTLE_TIMEOUT_MS` | `20000` |
 | `CHROME_CHANNEL` | `chrome` |
+
+## Baseline do alvo
+
+Apdata Global Antares, versao exibida no rodape do portal: **5.59.5.76** (2026-09-09).
+Quando um seletor quebrar, a primeira verificacao e se essa versao mudou.
+
+Autenticacao: SAML 2.0 federado com Entra ID, tenant `d8bde65a-3ded-4346-9518-670204e6e184`.
+O campo `NTLMLogin=true` no HTML da landing e legado e nao reflete o fluxo real.
 
 ## Seletores
 
