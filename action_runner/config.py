@@ -27,8 +27,9 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(raw).expanduser().resolve() if raw else default
 
 
-TARGET_URL: str = os.environ.get("TARGET_URL", "https://portalhoras.stefanini.com/main.html")
+TARGET_URL: str = os.environ.get("TARGET_URL", "https://portalhoras.stefanini.com/")
 CHROME_CHANNEL: str = os.environ.get("CHROME_CHANNEL", "chrome")
+AUTH_SERVER_ALLOWLIST: str = os.environ.get("AUTH_SERVER_ALLOWLIST", "*.stefanini.com")
 
 USER_DATA_DIR: Path = _env_path("USER_DATA_DIR", BASE_DIR / "chrome_profile")
 LOCK_PATH: Path = _env_path("LOCK_PATH", BASE_DIR / "run.lock")
@@ -57,7 +58,11 @@ SELECTORS: dict[str, str | None] = {
     "record_absent": None,
     "action_button": None,
     "post_click_anchor": None,
-    "modal_ok_button": "a[role=button]:has-text('Ok')",
+    "landing_sso_form": "form.singleSignOn",
+    "landing_sso_button": "form.singleSignOn input.btOK",
+    "landing_password_form": "form.fields",
+    "lgpd_modal": ".x-window:visible",
+    "lgpd_accept_button": ".x-window:visible a.btnPrimary[role=button]",
     "extjs_loading_mask": ".x-mask",
 }
 

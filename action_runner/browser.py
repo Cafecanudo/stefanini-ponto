@@ -15,7 +15,11 @@ def persistent_chrome() -> Iterator[tuple[BrowserContext, Page]]:
             channel=config.CHROME_CHANNEL,
             headless=config.HEADLESS,
             no_viewport=True,
-            args=["--start-maximized"],
+            args=[
+                "--start-maximized",
+                f"--auth-server-allowlist={config.AUTH_SERVER_ALLOWLIST}",
+                f"--auth-negotiate-delegate-allowlist={config.AUTH_SERVER_ALLOWLIST}",
+            ],
         )
         context.set_default_timeout(config.ACTION_TIMEOUT_MS)
         context.set_default_navigation_timeout(config.NAV_TIMEOUT_MS)

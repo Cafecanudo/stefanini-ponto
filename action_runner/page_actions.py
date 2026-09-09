@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import Page
@@ -27,8 +28,9 @@ def settle(page: Page) -> None:
 
 def dump_state(page: Page, name: str) -> tuple[Path, Path]:
     config.DUMP_DIR.mkdir(parents=True, exist_ok=True)
-    html_path = config.DUMP_DIR / f"{name}.html"
-    png_path = config.DUMP_DIR / f"{name}.png"
+    stamp = datetime.now().strftime("%H%M%S")
+    html_path = config.DUMP_DIR / f"{name}-{stamp}.html"
+    png_path = config.DUMP_DIR / f"{name}-{stamp}.png"
     html_path.write_text(page.content(), encoding="utf-8")
     page.screenshot(path=str(png_path), full_page=False)
     return html_path, png_path

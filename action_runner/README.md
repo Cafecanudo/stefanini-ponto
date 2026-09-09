@@ -74,7 +74,7 @@ convenção padrão sem wrapper de tradução.
 
 | Variável | Default |
 |---|---|
-| `TARGET_URL` | `https://portalhoras.stefanini.com/main.html` |
+| `TARGET_URL` | `https://portalhoras.stefanini.com/` |
 | `USER_DATA_DIR` | `action_runner/chrome_profile` |
 | `LOCK_PATH` | `action_runner/run.lock` |
 | `LOGS_DIR` | `action_runner/logs` |

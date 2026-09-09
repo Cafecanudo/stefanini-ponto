@@ -34,9 +34,11 @@ def cmd_login(log: logging.Logger) -> ExitCode:
         page_actions.goto_target(page)
         print("")
         print("=" * 70)
-        print(" Faca o login manualmente na janela do Chrome que abriu (incluindo MFA).")
-        print(" Quando a tela final do portal estiver carregada, volte aqui e")
-        print(" pressione ENTER para gravar a sessao e fechar.")
+        print(" 1. Se aparecer aviso de cookies/LGPD, aceite.")
+        print(" 2. Clique em 'Entrar no portal' (SSO Windows - nao digite senha).")
+        print(" 3. Se o Chrome pedir credencial em um popup nativo, CANCELE e avise:")
+        print("    significa que o dominio nao esta na zona de intranet.")
+        print(" 4. Com o portal carregado, volte aqui e pressione ENTER.")
         print("=" * 70)
         print("")
         input(" ENTER para finalizar > ")
@@ -58,8 +60,11 @@ def cmd_check(log: logging.Logger, dump_name: str | None) -> ExitCode:
         log.info("url: %s", page.url)
         log.info("titulo: %s", page.title())
 
+        log.info("landing detectada: %s", guards.is_portal_landing(page))
+        log.info("botao SSO visivel: %s", guards.sso_button_visible(page))
+
         if guards.is_login_screen(page):
-            log.error("tela de login/MFA detectada - sessao expirada")
+            log.error("nao autenticado - landing/login detectado")
             if dump_name:
                 html, png = page_actions.dump_state(page, dump_name)
                 log.info("dump: %s | %s", html, png)
