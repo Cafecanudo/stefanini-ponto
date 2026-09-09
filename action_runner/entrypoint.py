@@ -516,6 +516,7 @@ def main() -> int:
                     log(confirmacao.inner_text())
                     page.wait_for_timeout(PUNCH_SETTLE_MS)
                     save_evidence(page, "success")
+                    page.wait_for_timeout(5000)
         except Exception as exc:
             detalhe = str(exc).splitlines()[0] if str(exc) else ""
             log(f"erro nao previsto: {exc.__class__.__name__}: {detalhe}")
