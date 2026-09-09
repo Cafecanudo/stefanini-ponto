@@ -32,4 +32,7 @@ def persistent_chrome() -> Iterator[tuple[BrowserContext, Page]]:
         try:
             yield context, page
         finally:
-            context.close()
+            try:
+                context.close()
+            except Exception:
+                pass

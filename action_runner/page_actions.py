@@ -30,6 +30,25 @@ def settle(page: Page) -> None:
         pass
 
 
+def is_alive(page: Page) -> bool:
+    if page.is_closed():
+        return False
+    try:
+        page.evaluate("1")
+        return True
+    except Exception:
+        return False
+
+
+def describe(page: Page) -> tuple[str, str]:
+    if not is_alive(page):
+        return ("<janela fechada>", "<janela fechada>")
+    try:
+        return (page.url, page.title())
+    except Exception:
+        return (page.url or "<indisponivel>", "<indisponivel>")
+
+
 def dump_state(page: Page, name: str) -> tuple[Path, Path]:
     config.DUMP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%H%M%S")

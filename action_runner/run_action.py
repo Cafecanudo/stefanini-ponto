@@ -43,9 +43,14 @@ def cmd_login(log: logging.Logger) -> ExitCode:
         print("=" * 70)
         print("")
         input(" ENTER para finalizar > ")
+        if not page_actions.is_alive(page):
+            log.error("janela do Chrome foi fechada antes do ENTER")
+            log.error("a sessao pode ter sido gravada mesmo assim - rode 'check' para validar")
+            return ExitCode.UNEXPECTED_ERROR
         page_actions.settle(page)
-        log.info("url final: %s", page.url)
-        log.info("titulo: %s", page.title())
+        url, title = page_actions.describe(page)
+        log.info("url final: %s", url)
+        log.info("titulo: %s", title)
         if guards.is_login_screen(page):
             log.warning("ainda em tela de login - sessao NAO gravada")
             return ExitCode.SESSION_EXPIRED
@@ -59,8 +64,9 @@ def cmd_check(log: logging.Logger, dump_name: str | None) -> ExitCode:
         log.info("alvo: %s", config.APP_URL)
         page_actions.goto_app(page)
         page_actions.settle(page)
-        log.info("url: %s", page.url)
-        log.info("titulo: %s", page.title())
+        url, title = page_actions.describe(page)
+        log.info("url: %s", url)
+        log.info("titulo: %s", title)
 
         log.info("landing detectada: %s", guards.is_portal_landing(page))
         log.info("botao SSO visivel: %s", guards.sso_button_visible(page))
@@ -91,6 +97,9 @@ def cmd_dump(log: logging.Logger, dump_name: str) -> ExitCode:
         print("=" * 70)
         print("")
         input(" ENTER para capturar > ")
+        if not page_actions.is_alive(page):
+            log.error("janela do Chrome foi fechada antes do ENTER - nada capturado")
+            return ExitCode.UNEXPECTED_ERROR
         html, png = page_actions.dump_state(page, dump_name)
         log.info("dump: %s", html)
         log.info("shot: %s", png)
