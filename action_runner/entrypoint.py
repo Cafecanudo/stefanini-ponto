@@ -34,7 +34,8 @@ LOGIN_EMAIL_INPUT = (
 )
 LOGIN_PASSWORD_INPUT = 'input[type="password"][name="passwd"]'
 LOGIN_SUBMIT = 'input[type="submit"]'
-LOGIN_USER = "wsbarros1@latam.stefanini.com"
+LOGIN_USER_ENV = "USER_STEFANINI"
+LOGIN_USER = os.environ.get(LOGIN_USER_ENV, "")
 LOGIN_PASSWORD_ENV = "PASS_STEFANINI"
 LOGIN_PASSWORD = os.environ.get(LOGIN_PASSWORD_ENV, "")
 ACCOUNT_TILE = (
@@ -70,22 +71,24 @@ CLOCK_BUTTON = "text=Relógio de Ponto Virtual"
 PUNCH_BUTTON = "text=Efetuar Marcação"
 
 OK_NOOP = 1
+INTERRUPTED = 130
 
 MARK_PATTERN = re.compile(r"\b\d{2}:\d{2}\b")
 EXPECTED_WINDOWS = {
-    1: ("06:00", "09:15"),
+    1: ("08:45", "09:15"),
     2: ("12:45", "13:15"),
-    3: ("13:45", "14:35"),
+    3: ("13:45", "14:15"),
     4: ("17:45", "18:15"),
 }
 
 
 def wait_for_login_state(page) -> str:
-    alvos = (
-        ("tile", ACCOUNT_TILE),
+    alvos = [
         ("email", LOGIN_EMAIL_INPUT),
         ("password", LOGIN_PASSWORD_INPUT),
-    )
+    ]
+    if LOGIN_USER:
+        alvos.insert(0, ("tile", ACCOUNT_TILE))
     deadline = time.monotonic() + WAIT_LOGIN_WINDOW_MS / 1000
     while True:
         if APP_URL_MARK in page.url:
@@ -147,9 +150,55 @@ def bottom_right_position(width: int, height: int) -> tuple[int, int]:
     return (max(0, work_area.right - width), max(0, work_area.bottom - height))
 
 
+def missing_env_vars() -> list[str]:
+    faltando = []
+    if not LOGIN_USER:
+        faltando.append(LOGIN_USER_ENV)
+    if not LOGIN_PASSWORD:
+        faltando.append(LOGIN_PASSWORD_ENV)
+    return faltando
+
+
 def to_minutes(value: str) -> int:
     hours, minutes = value.split(":")
     return int(hours) * 60 + int(minutes)
+
+
+def parse_hhmm(value: str) -> str:
+    partes = value.split(":")
+    if len(partes) != 2 or not all(x.isdigit() and len(x) == 2 for x in partes):
+        raise argparse.ArgumentTypeError(f"horario invalido: {value!r}, esperado HH:MM")
+    if int(partes[0]) > 23 or int(partes[1]) > 59:
+        raise argparse.ArgumentTypeError(f"horario fora da faixa: {value!r}")
+    return value
+
+
+def format_windows(janelas: dict[int, tuple[str, str]]) -> str:
+    return ",".join(f"{k}={v[0]}-{v[1]}" for k, v in sorted(janelas.items()))
+
+
+def parse_windows(texto: str) -> dict[int, tuple[str, str]]:
+    janelas: dict[int, tuple[str, str]] = {}
+    for item in texto.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        chave, sep, faixa = item.partition("=")
+        if not sep:
+            raise argparse.ArgumentTypeError(f"item sem '=': {item!r}")
+        if not chave.strip().isdigit():
+            raise argparse.ArgumentTypeError(f"indice invalido: {chave!r}")
+        inicio, sep, fim = faixa.partition("-")
+        if not sep:
+            raise argparse.ArgumentTypeError(f"faixa sem '-': {faixa!r}")
+        inicio = parse_hhmm(inicio.strip())
+        fim = parse_hhmm(fim.strip())
+        if to_minutes(inicio) > to_minutes(fim):
+            raise argparse.ArgumentTypeError(f"inicio depois do fim: {item!r}")
+        janelas[int(chave.strip())] = (inicio, fim)
+    if not janelas:
+        raise argparse.ArgumentTypeError("nenhuma janela informada")
+    return janelas
 
 
 def parse_args() -> argparse.Namespace:
@@ -162,20 +211,43 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(EXPECTED_WINDOWS),
         required=True,
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--exp-windows",
+        "--exp_windows",
+        dest="exp_windows",
+        type=parse_windows,
+        default=EXPECTED_WINDOWS,
+        metavar="N=HH:MM-HH:MM,...",
+        help=f"padrao: {format_windows(EXPECTED_WINDOWS)}",
+    )
+    args = parser.parse_args()
+    if args.current_exe not in args.exp_windows:
+        parser.error(
+            f"--current-exe {args.current_exe} nao tem janela em --exp-windows"
+        )
+    return args
 
 
 def main() -> int:
     args = parse_args()
-    window_start, window_end = EXPECTED_WINDOWS[args.current_exe]
+    window_start, window_end = args.exp_windows[args.current_exe]
+    faltando = missing_env_vars()
+    if faltando:
+        print(f"variaveis de ambiente nao configuradas: {', '.join(faltando)}")
     USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
     pos_x, pos_y = bottom_right_position(WINDOW_WIDTH, WINDOW_HEIGHT)
-    print(f"janela {WINDOW_WIDTH}x{WINDOW_HEIGHT} em {pos_x},{pos_y}")
+    modo = "visivel" if args.show else "headless"
+    print(f"janela {WINDOW_WIDTH}x{WINDOW_HEIGHT} em {pos_x},{pos_y} ({modo})")
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(USER_DATA_DIR),
             channel="chrome",
-            headless=False,
+            headless=not args.show,
             no_viewport=True,
             args=[
                 f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
@@ -213,6 +285,9 @@ def main() -> int:
                 print(f"conta selecionada: {LOGIN_USER}")
                 page.wait_for_timeout(CLICK_DELAY_MS)
                 estado_login = "password"
+            if estado_login == "email" and not LOGIN_USER:
+                print(f"{LOGIN_USER_ENV} nao definida - usuario nao informado")
+                estado_login = "sem_usuario"
             if estado_login == "email":
                 login_email = page.locator(LOGIN_EMAIL_INPUT).first
                 try:
@@ -363,9 +438,16 @@ def main() -> int:
                 print("marcacao efetuada")
             input("ENTER para fechar > ")
         finally:
-            context.close()
+            try:
+                context.close()
+            except PlaywrightError as exc:
+                print(f"falha ao fechar o contexto: {exc}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("interrompido pelo usuario")
+        sys.exit(INTERRUPTED)
