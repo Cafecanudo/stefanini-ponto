@@ -12,6 +12,9 @@ from playwright.sync_api import sync_playwright
 
 BASE_DIR = Path(__file__).resolve().parent
 USER_DATA_DIR = BASE_DIR / "chrome_profile"
+LOGS_DIR = BASE_DIR / "logs"
+LOG_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
+LOG_LINE_FORMAT = "%H:%M:%S"
 TARGET_URL = "https://portalhoras.stefanini.com/"
 WINDOW_WIDTH = 1600
 WINDOW_HEIGHT = 1100
@@ -125,7 +128,7 @@ def wait_for_kmsi_or_portal(page) -> str:
             if tentativas >= MFA_RETRY_LIMIT:
                 return "mfa_falhou"
             tentativas += 1
-            print(f"MFA nao verificado - reenviando ({tentativas}/{MFA_RETRY_LIMIT})")
+            log(f"MFA nao verificado - reenviando ({tentativas}/{MFA_RETRY_LIMIT})")
             retry.click(timeout=ACTION_TIMEOUT_MS)
             page.wait_for_timeout(CLICK_DELAY_MS)
             continue
@@ -135,7 +138,7 @@ def wait_for_kmsi_or_portal(page) -> str:
 
 def bottom_right_position(width: int, height: int) -> tuple[int, int]:
     if sys.platform != "win32":
-        print("posicionamento automatico disponivel apenas no Windows - usando 0,0")
+        log("posicionamento automatico disponivel apenas no Windows - usando 0,0")
         return (0, 0)
     import ctypes
     from ctypes import wintypes
@@ -145,9 +148,34 @@ def bottom_right_position(width: int, height: int) -> tuple[int, int]:
         SPI_GETWORKAREA, 0, ctypes.byref(work_area), 0
     )
     if not ok:
-        print("SPI_GETWORKAREA falhou - usando 0,0")
+        log("SPI_GETWORKAREA falhou - usando 0,0")
         return (0, 0)
     return (max(0, work_area.right - width), max(0, work_area.bottom - height))
+
+
+LOG_HANDLE = None
+
+
+def setup_log() -> Path:
+    global LOG_HANDLE
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    caminho = LOGS_DIR / (datetime.now().strftime(LOG_NAME_FORMAT) + ".log")
+    LOG_HANDLE = caminho.open("a", encoding="utf-8")
+    return caminho
+
+
+def close_log() -> None:
+    global LOG_HANDLE
+    if LOG_HANDLE is not None:
+        LOG_HANDLE.close()
+        LOG_HANDLE = None
+
+
+def log(mensagem: str) -> None:
+    linha = f"{datetime.now().strftime(LOG_LINE_FORMAT)} {mensagem}"
+    print(linha)
+    if LOG_HANDLE is not None:
+        print(linha, file=LOG_HANDLE, flush=True)
 
 
 def missing_env_vars() -> list[str]:
@@ -236,13 +264,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     window_start, window_end = args.exp_windows[args.current_exe]
+    caminho_log = setup_log()
+    log(f"log em {caminho_log}")
     faltando = missing_env_vars()
     if faltando:
-        print(f"variaveis de ambiente nao configuradas: {', '.join(faltando)}")
+        log(f"variaveis de ambiente nao configuradas: {', '.join(faltando)}")
     USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
     pos_x, pos_y = bottom_right_position(WINDOW_WIDTH, WINDOW_HEIGHT)
     modo = "visivel" if args.show else "headless"
-    print(f"janela {WINDOW_WIDTH}x{WINDOW_HEIGHT} em {pos_x},{pos_y} ({modo})")
+    log(f"janela {WINDOW_WIDTH}x{WINDOW_HEIGHT} em {pos_x},{pos_y} ({modo})")
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(USER_DATA_DIR),
@@ -257,106 +287,106 @@ def main() -> int:
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-            print(f"aberto: {page.url}")
+            log(f"aberto: {page.url}")
             consent = page.locator(CONSENT_BUTTON).first
             try:
                 page.wait_for_timeout(5000)
 
                 consent.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("banner de preferencias nao apareceu")
+                log("banner de preferencias nao apareceu")
             else:
                 consent.click()
-                print("preferencias confirmadas")
+                log("preferencias confirmadas")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             enter_portal = page.locator(ENTER_PORTAL_BUTTON).first
             try:
                 enter_portal.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("botao Entrar no Portal nao encontrado")
+                log("botao Entrar no Portal nao encontrado")
             else:
                 enter_portal.click()
-                print(f"entrou no portal: {page.url}")
+                log(f"entrou no portal: {page.url}")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             estado_login = wait_for_login_state(page)
-            print(f"estado apos entrar no portal: {estado_login}")
+            log(f"estado apos entrar no portal: {estado_login}")
             if estado_login == "tile":
                 page.locator(ACCOUNT_TILE).first.click(timeout=ACTION_TIMEOUT_MS)
-                print(f"conta selecionada: {LOGIN_USER}")
+                log(f"conta selecionada: {LOGIN_USER}")
                 page.wait_for_timeout(CLICK_DELAY_MS)
                 estado_login = "password"
             if estado_login == "email" and not LOGIN_USER:
-                print(f"{LOGIN_USER_ENV} nao definida - usuario nao informado")
+                log(f"{LOGIN_USER_ENV} nao definida - usuario nao informado")
                 estado_login = "sem_usuario"
             if estado_login == "email":
                 login_email = page.locator(LOGIN_EMAIL_INPUT).first
                 try:
                     login_email.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
-                    print("campo de email nao apareceu")
+                    log("campo de email nao apareceu")
                 else:
                     login_email.fill(LOGIN_USER)
                     if login_email.input_value() != LOGIN_USER:
                         login_email.fill("")
                         login_email.click(timeout=ACTION_TIMEOUT_MS)
                         login_email.press_sequentially(LOGIN_USER, delay=50)
-                    print(f"usuario informado: {login_email.input_value()}")
+                    log(f"usuario informado: {login_email.input_value()}")
                     page.locator(LOGIN_SUBMIT).first.click(timeout=ACTION_TIMEOUT_MS)
                     page.wait_for_timeout(CLICK_DELAY_MS)
                     estado_login = "password"
             if estado_login == "password" and not LOGIN_PASSWORD:
-                print(f"{LOGIN_PASSWORD_ENV} nao definida - senha nao informada")
+                log(f"{LOGIN_PASSWORD_ENV} nao definida - senha nao informada")
                 estado_login = "sem_senha"
             if estado_login == "password":
                 login_password = page.locator(LOGIN_PASSWORD_INPUT).first
                 try:
                     login_password.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
-                    print("campo de senha nao apareceu")
+                    log("campo de senha nao apareceu")
                 else:
                     login_password.fill(LOGIN_PASSWORD)
                     page.locator(LOGIN_SUBMIT).first.click(timeout=ACTION_TIMEOUT_MS)
                     page.wait_for_timeout(CLICK_DELAY_MS)
                     espera = MFA_TIMEOUT_MS // 1000
-                    print(f"aguardando confirmacao manual do MFA (ate {espera}s)")
+                    log(f"aguardando confirmacao manual do MFA (ate {espera}s)")
                     estado = wait_for_kmsi_or_portal(page)
                     if estado == "timeout":
-                        print("MFA nao confirmado dentro do prazo")
+                        log("MFA nao confirmado dentro do prazo")
                     elif estado == "mfa_falhou":
-                        print(f"MFA falhou apos {MFA_RETRY_LIMIT} reenvios")
+                        log(f"MFA falhou apos {MFA_RETRY_LIMIT} reenvios")
                     elif estado == "portal":
-                        print(f"MFA confirmado - ja no portal: {page.url}")
+                        log(f"MFA confirmado - ja no portal: {page.url}")
                     else:
-                        print("MFA confirmado - tela Continuar conectado")
+                        log("MFA confirmado - tela Continuar conectado")
                         page.locator(KMSI_CHECKBOX).first.check(timeout=ACTION_TIMEOUT_MS)
-                        print("marcado: nao mostrar isso novamente")
+                        log("marcado: nao mostrar isso novamente")
                         page.wait_for_timeout(CLICK_DELAY_MS)
                         page.locator(KMSI_YES_BUTTON).first.click(timeout=ACTION_TIMEOUT_MS)
-                        print("continuar conectado: Sim")
+                        log("continuar conectado: Sim")
                         page.wait_for_timeout(CLICK_DELAY_MS)
                         try:
                             page.wait_for_url(APP_URL_PATTERN, timeout=NAV_TIMEOUT_MS)
                         except PlaywrightTimeoutError:
-                            print("nao voltou ao portal apos Continuar conectado")
+                            log("nao voltou ao portal apos Continuar conectado")
                         else:
-                            print(f"de volta no portal: {page.url}")
+                            log(f"de volta no portal: {page.url}")
             workarea = page.locator(WORKAREA_BUTTON).first
             try:
                 workarea.wait_for(state="visible", timeout=APP_READY_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("app nao carregou ou botao WorkArea nao encontrado")
+                log("app nao carregou ou botao WorkArea nao encontrado")
             else:
                 workarea.click(timeout=ACTION_TIMEOUT_MS)
-                print("workarea aberta")
+                log("workarea aberta")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             daily_entry = page.locator(DAILY_ENTRY_BUTTON).first
             try:
                 daily_entry.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("Apontamento Diario nao encontrado")
+                log("Apontamento Diario nao encontrado")
             else:
                 daily_entry.click(timeout=ACTION_TIMEOUT_MS)
-                print("apontamento diario aberto")
+                log("apontamento diario aberto")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             today = datetime.now().strftime("%d/%m")
             today_row = page.locator(GRID_ROW).filter(
@@ -366,82 +396,83 @@ def main() -> int:
             try:
                 checkbox.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print(f"linha de hoje ({today}) nao encontrada na grid")
+                log(f"linha de hoje ({today}) nao encontrada na grid")
             else:
                 checkbox.click(timeout=ACTION_TIMEOUT_MS)
-                print(f"checkbox marcado para {today}")
+                log(f"checkbox marcado para {today}")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             calc = page.locator(CALC_BUTTON).first
             try:
                 calc.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("botao Calcular dias selecionados nao encontrado")
+                log("botao Calcular dias selecionados nao encontrado")
             else:
                 calc.click(timeout=ACTION_TIMEOUT_MS)
-                print("calculo disparado")
+                log("calculo disparado")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             dialog_ok = page.locator(DIALOG_OK_BUTTON).first
             try:
                 dialog_ok.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("dialog de confirmacao nao apareceu")
+                log("dialog de confirmacao nao apareceu")
             else:
                 dialog_ok.click(timeout=ACTION_TIMEOUT_MS)
-                print("dialog confirmado")
+                log("dialog confirmado")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             window_close = page.locator(WINDOW_CLOSE_BUTTON).first
             try:
                 window_close.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("botao close da janela nao encontrado")
+                log("botao close da janela nao encontrado")
             else:
                 window_close.click(timeout=ACTION_TIMEOUT_MS)
-                print("janela fechada")
+                log("janela fechada")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             marks = MARK_PATTERN.findall(today_row.inner_text())
-            print(f"execucao {args.current_exe}: janela {window_start}-{window_end}")
-            print(f"marcacoes de {today}: {marks or 'nenhuma'}")
+            log(f"execucao {args.current_exe}: janela {window_start}-{window_end}")
+            log(f"marcacoes de {today}: {marks or 'nenhuma'}")
             found = [
                 mark
                 for mark in marks
                 if to_minutes(window_start) <= to_minutes(mark) <= to_minutes(window_end)
             ]
             if found:
-                print(f"marcacao ja existe na janela: {found[0]}")
+                log(f"marcacao ja existe na janela: {found[0]}")
                 return OK_NOOP
-            print("nenhuma marcacao na janela - voltando para a tela inicial")
+            log("nenhuma marcacao na janela - voltando para a tela inicial")
             home = page.locator(HOME_BUTTON).first
             try:
                 home.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("botao Voltar a tela inicial nao encontrado")
+                log("botao Voltar a tela inicial nao encontrado")
             else:
                 home.click(timeout=ACTION_TIMEOUT_MS)
-                print("de volta na tela inicial")
+                log("de volta na tela inicial")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             clock = page.locator(CLOCK_BUTTON).first
             try:
                 clock.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("Relogio de Ponto Virtual nao encontrado")
+                log("Relogio de Ponto Virtual nao encontrado")
             else:
                 clock.click(timeout=ACTION_TIMEOUT_MS)
-                print("relogio de ponto virtual aberto")
+                log("relogio de ponto virtual aberto")
                 page.wait_for_timeout(CLICK_DELAY_MS)
             punch = page.locator(PUNCH_BUTTON).first
             try:
                 punch.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                print("botao Efetuar Marcacao nao encontrado")
+                log("botao Efetuar Marcacao nao encontrado")
             else:
                 # punch.click(timeout=ACTION_TIMEOUT_MS)
-                print("marcacao efetuada")
+                log("marcacao efetuada")
             input("ENTER para fechar > ")
         finally:
             try:
                 context.close()
             except PlaywrightError as exc:
-                print(f"falha ao fechar o contexto: {exc}")
+                log(f"falha ao fechar o contexto: {exc}")
+            close_log()
     return 0
 
 
@@ -449,5 +480,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print("interrompido pelo usuario")
+        log("interrompido pelo usuario")
         sys.exit(INTERRUPTED)
