@@ -49,6 +49,7 @@ NAV_TIMEOUT_MS: int = _env_int("NAV_TIMEOUT_MS", 60000)
 ACTION_TIMEOUT_MS: int = _env_int("ACTION_TIMEOUT_MS", 15000)
 SETTLE_TIMEOUT_MS: int = _env_int("SETTLE_TIMEOUT_MS", 20000)
 APP_READY_TIMEOUT_MS: int = _env_int("APP_READY_TIMEOUT_MS", 90000)
+POLL_INTERVAL_MS: int = _env_int("POLL_INTERVAL_MS", 250)
 
 LOGIN_URL_MARKERS: tuple[str, ...] = (
     "login.microsoftonline.com",
@@ -70,6 +71,9 @@ SELECTORS: dict[str, str | None] = {
     "lgpd_modal": ".x-window:visible",
     "lgpd_accept_button": ".x-window:visible a.btnPrimary[role=button]",
     "app_ready": "body:not(.x-masked)",
+    "error_modal": ".x-window:visible",
+    "session_expired_modal": ".x-window:visible:has-text('expirou')",
+    "modal_ok_button": ".x-window:visible a[role=button]:has-text('Ok')",
     "sidebar_workarea": "a.sidebarButtons.workarea",
     "app_loading_mask": ".x-mask-msg.loading",
 }

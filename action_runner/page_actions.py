@@ -1,4 +1,6 @@
+import time
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 from playwright.sync_api import Page
@@ -22,12 +24,49 @@ def settle(page: Page) -> None:
         pass
 
 
-def wait_app_ready(page: Page) -> None:
-    page.wait_for_selector(
-        config.require_selector("app_ready"),
-        state="attached",
-        timeout=config.APP_READY_TIMEOUT_MS,
-    )
+class AppState(Enum):
+    READY = "ready"
+    SESSION_EXPIRED = "session_expired"
+    TIMEOUT = "timeout"
+
+
+def _visible(page: Page, selector_key: str) -> bool:
+    selector = config.SELECTORS.get(selector_key)
+    if not selector:
+        return False
+    try:
+        return page.locator(selector).count() > 0
+    except Exception:
+        return False
+
+
+def wait_app_ready(page: Page) -> AppState:
+    ready = config.require_selector("app_ready")
+    deadline = time.monotonic() + config.APP_READY_TIMEOUT_MS / 1000
+    while time.monotonic() < deadline:
+        if _visible(page, "session_expired_modal"):
+            return AppState.SESSION_EXPIRED
+        try:
+            if page.locator(ready).count() > 0:
+                return AppState.READY
+        except Exception:
+            pass
+        page.wait_for_timeout(config.POLL_INTERVAL_MS)
+    return AppState.TIMEOUT
+
+
+def enter_app(page: Page) -> AppState:
+    page.goto(config.TARGET_URL, wait_until="domcontentloaded", timeout=config.NAV_TIMEOUT_MS)
+    settle(page)
+    sso = config.SELECTORS.get("landing_sso_button")
+    if sso and page.locator(sso).count() > 0:
+        page.locator(sso).first.click()
+        try:
+            page.wait_for_url("**/main.html", timeout=config.NAV_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            return AppState.SESSION_EXPIRED
+        settle(page)
+    return wait_app_ready(page)
 
 
 def click_step(page: Page, selector: str) -> None:

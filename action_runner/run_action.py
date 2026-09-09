@@ -63,18 +63,23 @@ def cmd_login(log: logging.Logger) -> ExitCode:
 def cmd_check(log: logging.Logger, dump_name: str | None) -> ExitCode:
     with persistent_chrome() as (_, page):
         log.info("profile: %s", config.USER_DATA_DIR)
-        log.info("alvo: %s", config.APP_URL)
-        page_actions.goto_app(page)
-        page_actions.settle(page)
-        try:
-            page_actions.wait_app_ready(page)
-        except PlaywrightTimeoutError:
-            log.error("app nao ficou pronta em %dms (body continua .x-masked)",
-                      config.APP_READY_TIMEOUT_MS)
+        log.info("entrada: %s", config.TARGET_URL)
+        state = page_actions.enter_app(page)
+        log.info("estado da app: %s", state.value)
+
+        if state is page_actions.AppState.SESSION_EXPIRED:
+            log.error("sessao do portal expirada - refaca o login manual")
+            if dump_name:
+                html, png = page_actions.dump_state(page, f"{dump_name}-expirada")
+                log.info("dump: %s | %s", html, png)
+            return ExitCode.SESSION_EXPIRED
+        if state is page_actions.AppState.TIMEOUT:
+            log.error("app nao ficou pronta em %dms", config.APP_READY_TIMEOUT_MS)
             if dump_name:
                 html, png = page_actions.dump_state(page, f"{dump_name}-timeout")
                 log.info("dump: %s | %s", html, png)
             return ExitCode.SANITY_FAILED
+
         url, title = page_actions.describe(page)
         log.info("url: %s", url)
         log.info("titulo: %s", title)
@@ -98,12 +103,8 @@ def cmd_check(log: logging.Logger, dump_name: str | None) -> ExitCode:
 
 def cmd_dump(log: logging.Logger, dump_name: str) -> ExitCode:
     with persistent_chrome() as (_, page):
-        page_actions.goto_app(page)
-        page_actions.settle(page)
-        try:
-            page_actions.wait_app_ready(page)
-        except PlaywrightTimeoutError:
-            log.warning("app nao ficou pronta - capturando mesmo assim")
+        state = page_actions.enter_app(page)
+        log.info("estado da app: %s", state.value)
         log.info("url: %s", page.url)
         print("")
         print("=" * 70)
@@ -123,14 +124,20 @@ def cmd_dump(log: logging.Logger, dump_name: str) -> ExitCode:
 
 def cmd_nav(log: logging.Logger, until: str | None, dump_name: str) -> ExitCode:
     with persistent_chrome() as (_, page):
-        log.info("alvo: %s", config.APP_URL)
-        page_actions.goto_app(page)
-        page_actions.settle(page)
-        page_actions.wait_app_ready(page)
+        log.info("entrada: %s", config.TARGET_URL)
+        state = page_actions.enter_app(page)
+        log.info("estado da app: %s", state.value)
 
-        if guards.is_login_screen(page):
-            log.error("nao autenticado")
+        if state is page_actions.AppState.SESSION_EXPIRED:
+            log.error("sessao do portal expirada - refaca o login manual")
+            html, png = page_actions.dump_state(page, f"{dump_name}-expirada")
+            log.info("dump: %s | %s", html, png)
             return ExitCode.SESSION_EXPIRED
+        if state is page_actions.AppState.TIMEOUT:
+            log.error("app nao ficou pronta em %dms", config.APP_READY_TIMEOUT_MS)
+            html, png = page_actions.dump_state(page, f"{dump_name}-timeout")
+            log.info("dump: %s | %s", html, png)
+            return ExitCode.SANITY_FAILED
 
         for name, selector_key in config.NAV_STEPS:
             selector = config.require_selector(selector_key)
@@ -145,7 +152,14 @@ def cmd_nav(log: logging.Logger, until: str | None, dump_name: str) -> ExitCode:
                 log.warning("step '%s': %d elementos casam, usando o primeiro", name, found)
             page_actions.click_step(page, selector)
             page_actions.settle(page)
-            page_actions.wait_app_ready(page)
+            step_state = page_actions.wait_app_ready(page)
+            if step_state is not page_actions.AppState.READY:
+                log.error("step '%s': app em estado '%s'", name, step_state.value)
+                html, png = page_actions.dump_state(page, f"{dump_name}-falha-{name}")
+                log.info("dump: %s | %s", html, png)
+                return (ExitCode.SESSION_EXPIRED
+                        if step_state is page_actions.AppState.SESSION_EXPIRED
+                        else ExitCode.SANITY_FAILED)
             log.info("step '%s' concluido", name)
             if until and name == until:
                 break
