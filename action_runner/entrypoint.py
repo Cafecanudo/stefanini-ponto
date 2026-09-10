@@ -276,7 +276,7 @@ def main() -> int:
             channel="chrome",
             headless=not args.show,
             no_viewport=True,
-            args=["--start-fullscreen"],
+            args=["--start-maximized"],
         )
         page = None
         try:
