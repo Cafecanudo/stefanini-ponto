@@ -1,3 +1,4 @@
+import argparse
 import json
 import random
 import subprocess
@@ -102,7 +103,7 @@ def format_windows(dia: date) -> str:
     return ",".join(partes)
 
 
-def run_entrypoint(dia: date, base: str) -> int | None:
+def run_entrypoint(dia: date, base: str, show: bool) -> int | None:
     comando = [
         sys.executable,
         str(ENTRYPOINT),
@@ -111,7 +112,9 @@ def run_entrypoint(dia: date, base: str) -> int | None:
         "--exp-windows",
         format_windows(dia),
     ]
-    log(f"executando: --current-exe {comando[3]} --exp-windows {comando[5]}")
+    if show:
+        comando.append("--show")
+    log(f"executando: {' '.join(comando[2:])}")
     try:
         resultado = subprocess.run(comando, timeout=RUN_TIMEOUT_S)
     except subprocess.TimeoutExpired:
@@ -123,12 +126,22 @@ def run_entrypoint(dia: date, base: str) -> int | None:
     return resultado.returncode
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="scheduler")
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        default=False,
+    )
+    return parser.parse_args()
+
+
 def retry_interval() -> timedelta:
     minutos = (JITTER_MINUTES - RETRY_MARGIN_MINUTES) / RETRY_DIVISOR
     return timedelta(minutes=max(0.0, minutos))
 
 
-def execute_slot(dia: date, base: str, tolerancia: datetime) -> int | None:
+def execute_slot(dia: date, base: str, tolerancia: datetime, show: bool) -> int | None:
     intervalo = retry_interval()
     codigo = None
     for tentativa in range(1, RETRY_ATTEMPTS + 1):
@@ -136,7 +149,7 @@ def execute_slot(dia: date, base: str, tolerancia: datetime) -> int | None:
             log(f"slot {base}: tolerancia esgotada antes da tentativa {tentativa}")
             return codigo
         log(f"slot {base}: tentativa {tentativa}/{RETRY_ATTEMPTS}")
-        codigo = run_entrypoint(dia, base)
+        codigo = run_entrypoint(dia, base, show)
         if codigo in SUCCESS_CODES:
             return codigo
         log(f"slot {base}: tentativa {tentativa} falhou (exit {codigo})")
@@ -222,6 +235,8 @@ def build_schedule(
 
 
 def main() -> int:
+    args = parse_args()
+    log(f"chrome {'visivel' if args.show else 'headless'}")
     dia_atual = None
     pendentes: list[tuple[str, datetime]] = []
     execucoes: dict[str, str] = {}
@@ -262,7 +277,7 @@ def main() -> int:
                 )
                 continue
             log(f"disparo de {base} previsto para {previsto.strftime(TIME_FORMAT)}")
-            codigo = execute_slot(dia_atual, base, tolerancia)
+            codigo = execute_slot(dia_atual, base, tolerancia, args.show)
             if codigo in SUCCESS_CODES:
                 execucoes[base] = datetime.now().strftime(TIME_FORMAT)
                 save_state(dia_atual, execucoes, anterior)
