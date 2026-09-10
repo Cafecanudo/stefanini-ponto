@@ -5,6 +5,7 @@ __pycache__/
 _mapeamento/
 action_runner/logs/
 action_runner/evidencias/
+action_runner/scheduler_state.json
 action_runner/traces/
 action_runner/.lock
 chrome_profile/
