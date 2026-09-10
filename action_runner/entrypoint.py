@@ -19,9 +19,6 @@ EVIDENCE_QUALITY = 80
 LOG_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
 LOG_LINE_FORMAT = "%H:%M:%S"
 TARGET_URL = "https://portalhoras.stefanini.com/"
-WINDOW_WIDTH = 1600
-WINDOW_HEIGHT = 1100
-SPI_GETWORKAREA = 0x0030
 
 NAV_TIMEOUT_MS = 60000
 ACTION_TIMEOUT_MS = 15000
@@ -143,24 +140,6 @@ def wait_for_kmsi_or_portal(page) -> str:
     return "timeout"
 
 
-def bottom_right_position(width: int, height: int) -> tuple[int, int]:
-    if sys.platform != "win32":
-        log("posicionamento automatico disponivel apenas no Windows - usando 0,0")
-        return (0, 0)
-    import ctypes
-    from ctypes import wintypes
-
-    work_area = wintypes.RECT()
-    ok = ctypes.windll.user32.SystemParametersInfoW(
-        SPI_GETWORKAREA, 0, ctypes.byref(work_area), 0
-    )
-    if not ok:
-        log("SPI_GETWORKAREA falhou - usando 0,0")
-        return (0, 0)
-    return (max(0, work_area.right - width), max(0, work_area.bottom - height))
-
-
-LOG_HANDLE = None
 
 
 def setup_log() -> Path:
@@ -289,19 +268,15 @@ def main() -> int:
     if faltando:
         log(f"variaveis de ambiente nao configuradas: {', '.join(faltando)}")
     USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    pos_x, pos_y = bottom_right_position(WINDOW_WIDTH, WINDOW_HEIGHT)
     modo = "visivel" if args.show else "headless"
-    log(f"janela {WINDOW_WIDTH}x{WINDOW_HEIGHT} em {pos_x},{pos_y} ({modo})")
+    log(f"chrome {modo}")
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(USER_DATA_DIR),
             channel="chrome",
             headless=not args.show,
             no_viewport=True,
-            args=[
-                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
-                f"--window-position={pos_x},{pos_y}",
-            ],
+            args=["--start-fullscreen"],
         )
         page = None
         try:
@@ -352,7 +327,7 @@ def main() -> int:
                         login_email.press_sequentially(LOGIN_USER, delay=50)
                     log(f"usuario informado: {login_email.input_value()}")
                     page.locator(LOGIN_SUBMIT).first.click(timeout=ACTION_TIMEOUT_MS)
-                    page.wait_for_timeout(CLICK_DELAY_MS)
+                    page.wait_for_timeout(3000)
                     estado_login = "password"
             if estado_login in ("nenhum", "sem_usuario", "sem_senha"):
                 log(f"autenticacao impossivel - estado: {estado_login}")
