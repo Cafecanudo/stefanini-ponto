@@ -1,5 +1,6 @@
 import json
 import random
+import subprocess
 import sys
 import time
 from datetime import date, datetime, time as clock, timedelta
@@ -7,11 +8,15 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 STATE_FILE = BASE_DIR / "scheduler_state.json"
+ENTRYPOINT = BASE_DIR / "entrypoint.py"
+RUN_TIMEOUT_S = 600
+SUCCESS_CODES = (0, 1)
+RETRY_ATTEMPTS = 3
+RETRY_MARGIN_MINUTES = 2
+RETRY_DIVISOR = 3
 
-#BASE_TIMES = ("09:00", "13:00", "14:00", "18:00")
-BASE_TIMES = ("21:56", "21:57", "21:58", "21:59")
-#JITTER_MINUTES = 15
-JITTER_MINUTES = 1
+BASE_TIMES = ("09:00", "13:00", "14:00", "18:00")
+JITTER_MINUTES = 15
 MAX_SLEEP_S = 60
 MAX_WORK = timedelta(hours=8, minutes=15)
 
@@ -81,6 +86,73 @@ def last_execution(dia: date, execucoes: dict[str, str]) -> datetime | None:
 def target_datetime(dia: date, texto: str) -> datetime:
     hora, minuto = (int(parte) for parte in texto.split(":"))
     return datetime.combine(dia, clock(hora, minuto))
+
+
+def exe_index(texto: str) -> int:
+    return sorted(BASE_TIMES).index(texto) + 1
+
+
+def format_windows(dia: date) -> str:
+    partes = []
+    for indice, texto in enumerate(sorted(BASE_TIMES), start=1):
+        alvo = target_datetime(dia, texto)
+        inicio = alvo - timedelta(minutes=JITTER_MINUTES)
+        fim = alvo + timedelta(minutes=JITTER_MINUTES)
+        partes.append(f"{indice}={inicio.strftime('%H:%M')}-{fim.strftime('%H:%M')}")
+    return ",".join(partes)
+
+
+def run_entrypoint(dia: date, base: str) -> int | None:
+    comando = [
+        sys.executable,
+        str(ENTRYPOINT),
+        "--current-exe",
+        str(exe_index(base)),
+        "--exp-windows",
+        format_windows(dia),
+    ]
+    log(f"executando: --current-exe {comando[3]} --exp-windows {comando[5]}")
+    try:
+        resultado = subprocess.run(comando, timeout=RUN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        log(f"entrypoint excedeu {RUN_TIMEOUT_S}s e foi abortado")
+        return None
+    except OSError as exc:
+        log(f"falha ao executar o entrypoint: {exc}")
+        return None
+    return resultado.returncode
+
+
+def retry_interval() -> timedelta:
+    minutos = (JITTER_MINUTES - RETRY_MARGIN_MINUTES) / RETRY_DIVISOR
+    return timedelta(minutes=max(0.0, minutos))
+
+
+def execute_slot(dia: date, base: str, tolerancia: datetime) -> int | None:
+    intervalo = retry_interval()
+    codigo = None
+    for tentativa in range(1, RETRY_ATTEMPTS + 1):
+        if datetime.now() > tolerancia:
+            log(f"slot {base}: tolerancia esgotada antes da tentativa {tentativa}")
+            return codigo
+        log(f"slot {base}: tentativa {tentativa}/{RETRY_ATTEMPTS}")
+        codigo = run_entrypoint(dia, base)
+        if codigo in SUCCESS_CODES:
+            return codigo
+        log(f"slot {base}: tentativa {tentativa} falhou (exit {codigo})")
+        if tentativa == RETRY_ATTEMPTS:
+            break
+        proxima = datetime.now() + intervalo
+        if proxima > tolerancia:
+            log(
+                f"slot {base}: proxima tentativa cairia em "
+                f"{proxima.strftime(TIME_FORMAT)}, alem da tolerancia "
+                f"{tolerancia.strftime(TIME_FORMAT)} - desistindo da janela"
+            )
+            break
+        log(f"slot {base}: aguardando {intervalo.total_seconds():.0f}s para a proxima")
+        time.sleep(intervalo.total_seconds())
+    return codigo
 
 
 def parse_execution(dia: date, texto: str) -> datetime | None:
@@ -190,10 +262,13 @@ def main() -> int:
                 )
                 continue
             log(f"disparo de {base} previsto para {previsto.strftime(TIME_FORMAT)}")
-            print("Execute")
-            execucoes[base] = datetime.now().strftime(TIME_FORMAT)
-            save_state(dia_atual, execucoes, anterior)
-            log(f"registrado: {base} executado as {execucoes[base]}")
+            codigo = execute_slot(dia_atual, base, tolerancia)
+            if codigo in SUCCESS_CODES:
+                execucoes[base] = datetime.now().strftime(TIME_FORMAT)
+                save_state(dia_atual, execucoes, anterior)
+                log(f"registrado: {base} executado as {execucoes[base]} (exit {codigo})")
+            else:
+                log(f"{base} NAO registrado - entrypoint retornou {codigo}")
 
         if pendentes:
             espera = (pendentes[0][1] - datetime.now()).total_seconds()
