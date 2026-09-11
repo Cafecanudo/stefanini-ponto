@@ -436,52 +436,56 @@ def main() -> int:
             except PlaywrightTimeoutError:
                 log(f"linha de hoje ({today}) nao encontrada na grid")
                 save_evidence(page, "erro-linha-do-dia")
+                linha_encontrada = False
             else:
                 checkbox.click(timeout=ACTION_TIMEOUT_MS)
                 log(f"checkbox marcado para {today}")
                 page.wait_for_timeout(CLICK_DELAY_MS)
-            calc = page.locator(CALC_BUTTON).first
-            try:
-                calc.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                log("botao Calcular dias selecionados nao encontrado")
-                save_evidence(page, "erro-calcular-dias")
-            else:
-                calc.click(timeout=ACTION_TIMEOUT_MS)
-                log("calculo disparado")
-                page.wait_for_timeout(CLICK_DELAY_MS)
-            dialog_ok = page.locator(DIALOG_OK_BUTTON).first
-            try:
-                dialog_ok.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                log("dialog de confirmacao nao apareceu")
-                save_evidence(page, "erro-dialog-confirmacao")
-            else:
-                dialog_ok.click(timeout=ACTION_TIMEOUT_MS)
-                log("dialog confirmado")
-                page.wait_for_timeout(CLICK_DELAY_MS)
-            window_close = page.locator(WINDOW_CLOSE_BUTTON).first
-            try:
-                window_close.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                log("botao close da janela nao encontrado")
-                save_evidence(page, "erro-fechar-janela")
-            else:
-                window_close.click(timeout=ACTION_TIMEOUT_MS)
-                log("janela fechada")
-                page.wait_for_timeout(CLICK_DELAY_MS)
-            marks = MARK_PATTERN.findall(today_row.inner_text())
-            log(f"execucao {args.current_exe}: janela {window_start}-{window_end}")
-            log(f"marcacoes de {today}: {marks or 'nenhuma'}")
-            found = [
-                mark
-                for mark in marks
-                if to_minutes(window_start) <= to_minutes(mark) <= to_minutes(window_end)
-            ]
-            if found:
-                log(f"marcacao ja existe na janela: {found[0]}")
-                return OK_NOOP
-            log("nenhuma marcacao na janela - voltando para a tela inicial")
+                linha_encontrada = True
+            if linha_encontrada:
+                calc = page.locator(CALC_BUTTON).first
+                try:
+                    calc.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    log("botao Calcular dias selecionados nao encontrado")
+                    save_evidence(page, "erro-calcular-dias")
+                else:
+                    calc.click(timeout=ACTION_TIMEOUT_MS)
+                    log("calculo disparado")
+                    page.wait_for_timeout(CLICK_DELAY_MS)
+                dialog_ok = page.locator(DIALOG_OK_BUTTON).first
+                try:
+                    dialog_ok.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    log("dialog de confirmacao nao apareceu")
+                    save_evidence(page, "erro-dialog-confirmacao")
+                else:
+                    dialog_ok.click(timeout=ACTION_TIMEOUT_MS)
+                    log("dialog confirmado")
+                    page.wait_for_timeout(CLICK_DELAY_MS)
+                window_close = page.locator(WINDOW_CLOSE_BUTTON).first
+                try:
+                    window_close.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    log("botao close da janela nao encontrado")
+                    save_evidence(page, "erro-fechar-janela")
+                else:
+                    window_close.click(timeout=ACTION_TIMEOUT_MS)
+                    log("janela fechada")
+                    page.wait_for_timeout(CLICK_DELAY_MS)
+                marks = MARK_PATTERN.findall(today_row.inner_text())
+                log(f"execucao {args.current_exe}: janela {window_start}-{window_end}")
+                log(f"marcacoes de {today}: {marks or 'nenhuma'}")
+                found = [
+                    mark
+                    for mark in marks
+                    if to_minutes(window_start) <= to_minutes(mark) <= to_minutes(window_end)
+                ]
+                if found:
+                    log(f"marcacao ja existe na janela: {found[0]}")
+                    return OK_NOOP
+                log("nenhuma marcacao na janela - voltando para a tela inicial")
+
             home = page.locator(HOME_BUTTON).first
             try:
                 home.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
@@ -521,7 +525,6 @@ def main() -> int:
                     save_evidence(page, "erro-confirmacao-marcacao")
                 else:
                     log(confirmacao.inner_text())
-                    page.wait_for_timeout(PUNCH_SETTLE_MS)
                     save_evidence(page, "success")
                     page.wait_for_timeout(5000)
         except Exception as exc:
