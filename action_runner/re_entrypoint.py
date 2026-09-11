@@ -230,6 +230,20 @@ def parse_date(value: str) -> datetime:
         ) from None
 
 
+def window_center(inicio: str, fim: str) -> str:
+    meio = (to_minutes(inicio) + to_minutes(fim)) // 2
+    return f"{meio // 60:02d}:{meio % 60:02d}"
+
+
+def plan_fill(marks: list[str], faltantes: list[tuple[str, str]]) -> list[tuple[int, str]]:
+    plano = []
+    proxima = len(marks)
+    for inicio, fim in faltantes:
+        plano.append((proxima, window_center(inicio, fim)))
+        proxima += 1
+    return plano
+
+
 def previous_business_day(referencia: datetime) -> datetime:
     dia = referencia - timedelta(days=1)
     while dia.weekday() >= 5:
@@ -466,16 +480,19 @@ def main() -> int:
                         for marca in marks
                     )
                     if not presente:
-                        faltantes.append(f"{inicio}-{fim_janela}")
+                        faltantes.append((inicio, fim_janela))
                 if faltantes:
-                    log(f"Falta apontamentos: [{join_pt(faltantes)}]")
+                    rotulos = [f"{ini}-{fim_j}" for ini, fim_j in faltantes]
+                    log(f"Falta apontamentos: [{join_pt(rotulos)}]")
+                    for posicao, valor in plan_fill(marks, faltantes):
+                        log(f"preenchimento planejado: celula {posicao + 1} <- {valor}")
                 else:
                     log(f"dia {dia} completo: {len(args.exp_windows)} apontamentos")
 
             
                 
 
-
+            input("Continuar")
         except Exception as exc:
             detalhe = str(exc).splitlines()[0] if str(exc) else ""
             log(f"erro nao previsto: {exc.__class__.__name__}: {detalhe}")
