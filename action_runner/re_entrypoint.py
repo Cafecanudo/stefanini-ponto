@@ -3,7 +3,7 @@ import os
 import re
 import time
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from playwright.sync_api import Error as PlaywrightError
@@ -216,6 +216,33 @@ def missing_env_vars() -> list[str]:
     return faltando
 
 
+def parse_date(value: str) -> datetime:
+    texto = value.strip()
+    try:
+        return datetime.strptime(texto, "%d/%m/%Y")
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(f"{texto}/{datetime.now().year}", "%d/%m/%Y")
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"data invalida: {value!r}, use dd/mm ou dd/mm/aaaa"
+        ) from None
+
+
+def previous_business_day(referencia: datetime) -> datetime:
+    dia = referencia - timedelta(days=1)
+    while dia.weekday() >= 5:
+        dia -= timedelta(days=1)
+    return dia
+
+
+def join_pt(itens: list[str]) -> str:
+    if len(itens) <= 1:
+        return "".join(itens)
+    return f"{', '.join(itens[:-1])} e {itens[-1]}"
+
+
 def to_minutes(value: str) -> int:
     hours, minutes = value.split(":")
     return int(hours) * 60 + int(minutes)
@@ -259,19 +286,18 @@ def parse_windows(texto: str) -> dict[int, tuple[str, str]]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="entrypoint")
-    parser.add_argument(
-        "--current-exe",
-        "--current_exe",
-        dest="current_exe",
-        type=int,
-        choices=sorted(EXPECTED_WINDOWS),
-        required=True,
-    )
+    parser = argparse.ArgumentParser(prog="re_entrypoint")
     parser.add_argument(
         "--show",
         action="store_true",
         default=False,
+    )
+    parser.add_argument(
+        "--date",
+        dest="date",
+        type=parse_date,
+        default=None,
+        metavar="dd/mm[/aaaa]",
     )
     parser.add_argument(
         "--exp-windows",
@@ -282,17 +308,11 @@ def parse_args() -> argparse.Namespace:
         metavar="N=HH:MM-HH:MM,...",
         help=f"padrao: {format_windows(EXPECTED_WINDOWS)}",
     )
-    args = parser.parse_args()
-    if args.current_exe not in args.exp_windows:
-        parser.error(
-            f"--current-exe {args.current_exe} nao tem janela em --exp-windows"
-        )
-    return args
+    return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    window_start, window_end = args.exp_windows[args.current_exe]
     caminho_log = setup_log()
     log(f"log em {caminho_log}")
     faltando = missing_env_vars()
@@ -424,107 +444,38 @@ def main() -> int:
                 daily_entry.click(timeout=ACTION_TIMEOUT_MS)
                 log("apontamento diario aberto")
                 page.wait_for_timeout(CLICK_DELAY_MS)
-            today = datetime.now().strftime("%d/%m")
-            today_row = page.locator(GRID_ROW).filter(
-                has=page.locator(GRID_ROW_DATE_CELL, has_text=re.compile(rf"^{today}\s"))
-            )
-            checkbox = today_row.locator(GRID_ROW_CHECKBOX).first
+            alvo = args.date or previous_business_day(datetime.now())
+            dia = alvo.strftime("%d/%m")
+            log(f"verificando {dia} ({alvo.strftime('%A')})")
+            dia_row = page.locator(GRID_ROW).filter(
+                has=page.locator(GRID_ROW_DATE_CELL, has_text=re.compile(rf"^{dia}\s"))
+            ).first
             try:
-                checkbox.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                dia_row.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                log(f"linha de hoje ({today}) nao encontrada na grid")
+                log(f"linha de {dia} nao encontrada na grid")
                 save_evidence(page, "erro-linha-do-dia")
-                linha_encontrada = False
             else:
-                checkbox.click(timeout=ACTION_TIMEOUT_MS)
-                log(f"checkbox marcado para {today}")
-                page.wait_for_timeout(CLICK_DELAY_MS)
-                linha_encontrada = True
-            if linha_encontrada:
-                calc = page.locator(CALC_BUTTON).first
-                try:
-                    calc.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-                except PlaywrightTimeoutError:
-                    log("botao Calcular dias selecionados nao encontrado")
-                    save_evidence(page, "erro-calcular-dias")
-                else:
-                    calc.click(timeout=ACTION_TIMEOUT_MS)
-                    log("calculo disparado")
-                    page.wait_for_timeout(CLICK_DELAY_MS)
-                dialog_ok = page.locator(DIALOG_OK_BUTTON).first
-                try:
-                    dialog_ok.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-                except PlaywrightTimeoutError:
-                    log("dialog de confirmacao nao apareceu")
-                    save_evidence(page, "erro-dialog-confirmacao")
-                else:
-                    dialog_ok.click(timeout=ACTION_TIMEOUT_MS)
-                    log("dialog confirmado")
-                    page.wait_for_timeout(CLICK_DELAY_MS)
-                window_close = page.locator(WINDOW_CLOSE_BUTTON).first
-                try:
-                    window_close.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-                except PlaywrightTimeoutError:
-                    log("botao close da janela nao encontrado")
-                    save_evidence(page, "erro-fechar-janela")
-                else:
-                    window_close.click(timeout=ACTION_TIMEOUT_MS)
-                    log("janela fechada")
-                    page.wait_for_timeout(CLICK_DELAY_MS)
-                marks = MARK_PATTERN.findall(today_row.inner_text())
-                log(f"execucao {args.current_exe}: janela {window_start}-{window_end}")
-                log(f"marcacoes de {today}: {marks or 'nenhuma'}")
-                found = [
-                    mark
-                    for mark in marks
-                    if to_minutes(window_start) <= to_minutes(mark) <= to_minutes(window_end)
-                ]
-                if found:
-                    log(f"marcacao ja existe na janela: {found[0]}")
-                    return OK_NOOP
-                log("nenhuma marcacao na janela - voltando para a tela inicial")
-
-            home = page.locator(HOME_BUTTON).first
-            try:
-                home.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                log("botao Voltar a tela inicial nao encontrado")
-                save_evidence(page, "erro-tela-inicial")
-            else:
-                home.click(timeout=ACTION_TIMEOUT_MS)
-                log("de volta na tela inicial")
-                page.wait_for_timeout(CLICK_DELAY_MS)
-            clock = page.locator(CLOCK_BUTTON).first
-            try:
-                clock.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                log("Relogio de Ponto Virtual nao encontrado")
-                save_evidence(page, "erro-relogio-ponto")
-            else:
-                clock.click(timeout=ACTION_TIMEOUT_MS)
-                log("relogio de ponto virtual aberto")
-                page.wait_for_timeout(CLICK_DELAY_MS)
-            punch = page.locator(PUNCH_BUTTON).first
-            try:
-                punch.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                log("botao Efetuar Marcacao nao encontrado")
-                save_evidence(page, "erro-efetuar-marcacao")
-            else:
-                punch.click(timeout=ACTION_TIMEOUT_MS)
-                log("marcacao enviada - aguardando confirmacao")
-                confirmacao = page.locator(PUNCH_CONFIRMATION).first
-                try:
-                    confirmacao.wait_for(
-                        state="visible", timeout=ACTION_TIMEOUT_MS
+                marks = MARK_PATTERN.findall(dia_row.inner_text())
+                log(f"marcacoes de {dia}: {marks or 'nenhuma'}")
+                faltantes = []
+                for indice in sorted(args.exp_windows):
+                    inicio, fim_janela = args.exp_windows[indice]
+                    presente = any(
+                        to_minutes(inicio) <= to_minutes(marca) <= to_minutes(fim_janela)
+                        for marca in marks
                     )
-                except PlaywrightTimeoutError:
-                    log("confirmacao da marcacao nao apareceu")
-                    save_evidence(page, "erro-confirmacao-marcacao")
+                    if not presente:
+                        faltantes.append(f"{inicio}-{fim_janela}")
+                if faltantes:
+                    log(f"Falta apontamentos: [{join_pt(faltantes)}]")
                 else:
-                    log(confirmacao.inner_text())
-                    save_evidence(page, "success")
-                    page.wait_for_timeout(5000)
+                    log(f"dia {dia} completo: {len(args.exp_windows)} apontamentos")
+
+            
+                
+
+
         except Exception as exc:
             detalhe = str(exc).splitlines()[0] if str(exc) else ""
             log(f"erro nao previsto: {exc.__class__.__name__}: {detalhe}")
