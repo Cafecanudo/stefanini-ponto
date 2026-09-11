@@ -18,7 +18,7 @@ EVIDENCE_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
 EVIDENCE_QUALITY = 80
 LOG_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
 LOG_LINE_FORMAT = "%H:%M:%S"
-TARGET_URL = "https://portalhorass.stefanini.com/"
+TARGET_URL = "https://portalhoras.stefanini.com/"
 
 NAV_TIMEOUT_MS = 60000
 HTTP_ERROR_STATUS = 400
@@ -173,7 +173,12 @@ def save_evidence(page, situacao: str) -> None:
     nome = f"{datetime.now().strftime(EVIDENCE_NAME_FORMAT)}-{situacao}.jpg"
     caminho = EVIDENCE_DIR / nome
     try:
-        page.screenshot(path=str(caminho), type="jpeg", quality=EVIDENCE_QUALITY)
+        page.screenshot(
+            path=str(caminho),
+            type="jpeg",
+            quality=EVIDENCE_QUALITY,
+            full_page=True,
+        )
     except PlaywrightError as exc:
         log(f"falha ao salvar evidencia {nome}: {exc}")
         return
