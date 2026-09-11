@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+*.xml
+*.iml
+.idea
 _mapeamento/
 action_runner/logs/
 action_runner/evidencias/
