@@ -18,9 +18,10 @@ EVIDENCE_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
 EVIDENCE_QUALITY = 80
 LOG_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
 LOG_LINE_FORMAT = "%H:%M:%S"
-TARGET_URL = "https://portalhoras.stefanini.com/"
+TARGET_URL = "https://portalhorass.stefanini.com/"
 
 NAV_TIMEOUT_MS = 60000
+HTTP_ERROR_STATUS = 400
 ACTION_TIMEOUT_MS = 15000
 WAIT_LOGIN_WINDOW_MS = 8000
 MFA_TIMEOUT_MS = 60000
@@ -142,6 +143,9 @@ def wait_for_kmsi_or_portal(page) -> str:
 
 
 
+LOG_HANDLE = None
+
+
 def setup_log() -> Path:
     global LOG_HANDLE
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -174,6 +178,30 @@ def save_evidence(page, situacao: str) -> None:
         log(f"falha ao salvar evidencia {nome}: {exc}")
         return
     log(f"evidencia: {caminho}")
+
+
+def response_status(resposta) -> int | None:
+    return resposta.status if resposta is not None else None
+
+
+def open_target(page) -> bool:
+    resposta = page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+    status = response_status(resposta)
+    if status is None or status < HTTP_ERROR_STATUS:
+        log(f"aberto: {page.url}")
+        return True
+
+    log(f"portal indisponivel - HTTP {status} - tentando refresh")
+    page.wait_for_timeout(CLICK_DELAY_MS)
+    resposta = page.reload(wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+    status = response_status(resposta)
+    if status is None or status < HTTP_ERROR_STATUS:
+        log(f"portal respondeu apos o refresh: {page.url}")
+        return True
+
+    log(f"portal segue indisponivel apos o refresh - HTTP {status}")
+    save_evidence(page, "erro-portal-indisponivel")
+    return False
 
 
 def missing_env_vars() -> list[str]:
@@ -281,8 +309,7 @@ def main() -> int:
         page = None
         try:
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-            log(f"aberto: {page.url}")
+            open_target(page)
             consent = page.locator(CONSENT_BUTTON).first
             try:
                 consent.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
