@@ -1,5 +1,7 @@
 import argparse
+import itertools
 import os
+import random
 import re
 import time
 import sys
@@ -14,6 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent
 USER_DATA_DIR = BASE_DIR / "chrome_profile"
 LOGS_DIR = BASE_DIR / "logs"
 EVIDENCE_DIR = BASE_DIR / "evidencias"
+DUMP_DIR = BASE_DIR / "dumps"
 EVIDENCE_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
 EVIDENCE_QUALITY = 80
 LOG_NAME_FORMAT = "%d-%m-%Y %H.%M.%S"
@@ -27,6 +30,7 @@ WAIT_LOGIN_WINDOW_MS = 8000
 MFA_TIMEOUT_MS = 60000
 POLL_INTERVAL_MS = 500
 CLICK_DELAY_MS = 800
+COMBO_OPEN_DELAY_MS = 2500
 APP_READY_TIMEOUT_MS = 60000
 
 CONSENT_BUTTON = "text=Confirmar preferências"
@@ -57,11 +61,37 @@ KMSI_CHECKBOX = 'input[name="DontShowAgain"], #KmsiCheckboxField'
 KMSI_YES_BUTTON = 'input[type="submit"]#idSIButton9, input[type="submit"][value="Sim"]'
 WORKAREA_BUTTON = "a.sidebarButtons.workarea"
 DAILY_ENTRY_BUTTON = "text=Apontamento Diário"
+TOOLBAR_COMBO_ID = "combotoolbar-1036_1"
+TOOLBAR_COMBO_INPUT = f"#{TOOLBAR_COMBO_ID}-inputEl"
+TOOLBAR_COMBO_TRIGGER = f"#{TOOLBAR_COMBO_ID}-trigger-picker"
+TOOLBAR_COMBO_ITEM = ".x-boundlist:visible .x-boundlist-item"
+TOOLBAR_COMBO_MONTH = re.compile(r"^\d{2} - ")
 GRID_ROW = "tr.x-grid-row"
 GRID_ROW_DATE_CELL = "td"
 GRID_ROW_CHECKBOX = "div.x-grid-row-checker"
+GRID_TIME_CELLS = 8
+GRID_CELL_INNER = "div.x-grid-cell-inner"
+GRID_VIEW = ".x-grid-view"
+TIME_CELL_EDITOR = ".x-grid-cell-editor input, .x-grid-editor input, .x-editor input"
+CELL_CLICK_DELAY_MS = 120
 CALC_BUTTON_ICON = "img201.png"
 CALC_BUTTON = f'a.toolbar-footer-button:has(span[style*="{CALC_BUTTON_ICON}"])'
+SAVE_BUTTON = "a.btSalvar"
+JUSTIF_GENERAL_CELL = "td.allJustifMarcacao1047Td"
+JUSTIF_GENERAL_TRIGGER = f"{JUSTIF_GENERAL_CELL} .x-form-arrow-trigger"
+JUSTIF_GENERAL_INPUT = f"{JUSTIF_GENERAL_CELL} input[role=combobox]"
+JUSTIF_VALUE = "Serviço Externo"
+JUSTIF_OPTION = f'.x-grid-cell-inner:text-is("{JUSTIF_VALUE}")'
+JUSTIF_OBS_INPUT = (
+    f"tr:has({JUSTIF_GENERAL_CELL}) td.obsMarcacao1047Td input"
+)
+JUSTIF_OBS_TEXT = "Serviço externo nao estava acessivel"
+JUSTIF_SAVE_BUTTON = "a.btSalvar:visible"
+ERROR_MODAL = ".x-message-box:visible"
+SAVE_ERROR_WINDOW = (
+    ".x-window:visible:has(a.btPesquisaErro), "
+    '.x-window:visible:has(.x-title-text:text-is("Erro"))'
+)
 DIALOG_OK_BUTTON = (
     '.x-message-box:visible '
     'a[role="button"]:has(span.x-btn-inner:text-is("Ok"))'
@@ -80,6 +110,10 @@ OK_NOOP = 1
 SANITY_FAILED = 20
 UNEXPECTED_ERROR = 40
 INTERRUPTED = 130
+
+WORK_MIN_MINUTES = 8 * 60
+WORK_RELAXED_MIN_MINUTES = 7 * 60 + 50
+WORK_MAX_MINUTES = 8 * 60 + 15
 
 MARK_PATTERN = re.compile(r"\b\d{2}:\d{2}\b")
 EXPECTED_WINDOWS = {
@@ -183,6 +217,90 @@ def save_evidence(page, situacao: str) -> None:
     log(f"evidencia: {caminho}")
 
 
+PROBE_SCRIPT = """() => {
+    const alvos = document.querySelectorAll('input, textarea, .x-editor, [class*="editor"]');
+    return Array.from(alvos).map(el => {
+        const r = el.getBoundingClientRect();
+        return (el.tagName + ' id=' + (el.id || '-') +
+                ' class=' + (el.className || '-') +
+                ' val=' + (el.value === undefined ? '-' : el.value) +
+                ' box=' + Math.round(r.x) + ',' + Math.round(r.y) +
+                ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
+    });
+}"""
+
+
+def describe_target(celula, inner) -> None:
+    try:
+        log(
+            f"  alvo: columnid={celula.get_attribute('data-columnid')} "
+            f"texto={celula.inner_text()!r} td_box={celula.bounding_box()} "
+            f"inner_box={inner.bounding_box()}"
+        )
+    except PlaywrightError as exc:
+        log(f"  alvo: nao foi possivel medir - {exc}")
+
+
+def open_cell_editor(page, celula, inner):
+    describe_target(celula, inner)
+    inner.click(timeout=ACTION_TIMEOUT_MS, delay=CELL_CLICK_DELAY_MS)
+    editor = celula.locator(TIME_CELL_EDITOR).first
+    inner.dblclick(timeout=ACTION_TIMEOUT_MS, delay=CELL_CLICK_DELAY_MS)
+    try:
+        editor.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        log("  editor da celula nao abriu")
+        return None
+    return editor
+
+
+def check_modal(page, rotulo: str) -> bool:
+    modal = page.locator(ERROR_MODAL).first
+    try:
+        if not modal.is_visible():
+            return False
+        texto = " ".join(modal.inner_text().split())
+    except PlaywrightError:
+        return False
+    log(f"MODAL {rotulo}: {texto}")
+    save_evidence(page, "modal-portal")
+    return True
+
+
+def check_save_error(page) -> bool:
+    janela = page.locator(SAVE_ERROR_WINDOW).first
+    try:
+        if not janela.is_visible():
+            return False
+        texto = " ".join(janela.inner_text().split())
+    except PlaywrightError:
+        return False
+    log(f"ERRO AO SALVAR: {texto}")
+    return True
+
+
+def probe_editor(page, rotulo: str) -> None:
+    try:
+        achados = page.evaluate(PROBE_SCRIPT)
+    except PlaywrightError as exc:
+        log(f"sonda {rotulo}: falhou - {exc}")
+        return
+    log(f"sonda {rotulo}: {len(achados)} candidatos")
+    for item in achados:
+        log(f"    {item}")
+
+
+def save_dump(page, nome: str) -> None:
+    DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    caminho = DUMP_DIR / f"{datetime.now().strftime(EVIDENCE_NAME_FORMAT)}-{nome}.html"
+    try:
+        caminho.write_text(page.content(), encoding="utf-8")
+    except (PlaywrightError, OSError) as exc:
+        log(f"falha ao salvar dump {nome}: {exc}")
+        return
+    log(f"dump: {caminho}")
+
+
 def response_status(resposta) -> int | None:
     return resposta.status if resposta is not None else None
 
@@ -230,18 +348,135 @@ def parse_date(value: str) -> datetime:
         ) from None
 
 
-def window_center(inicio: str, fim: str) -> str:
-    meio = (to_minutes(inicio) + to_minutes(fim)) // 2
-    return f"{meio // 60:02d}:{meio % 60:02d}"
+def to_clock(minutos: int) -> str:
+    return f"{minutos // 60:02d}:{minutos % 60:02d}"
 
 
-def plan_fill(marks: list[str], faltantes: list[tuple[str, str]]) -> list[tuple[int, str]]:
-    plano = []
-    proxima = len(marks)
-    for inicio, fim in faltantes:
-        plano.append((proxima, window_center(inicio, fim)))
-        proxima += 1
-    return plano
+def window_center(inicio: str, fim: str) -> int:
+    return (to_minutes(inicio) + to_minutes(fim)) // 2
+
+
+def assign_slots(marks: list[str], windows: dict) -> tuple[dict[int, int], list[int], bool]:
+    slots = sorted(windows)
+    valores = sorted(to_minutes(marca) for marca in marks)[: len(slots)]
+    if not valores:
+        return {}, list(slots), True
+
+    melhor = None
+    for combo in itertools.combinations(slots, len(valores)):
+        custo = sum(
+            abs(valor - window_center(*windows[slot]))
+            for valor, slot in zip(valores, combo)
+        )
+        if melhor is None or custo < melhor[0]:
+            melhor = (custo, combo)
+
+    presentes = dict(zip(melhor[1], valores))
+    faltantes = [slot for slot in slots if slot not in presentes]
+    dentro = all(
+        to_minutes(windows[slot][0]) <= valor <= to_minutes(windows[slot][1])
+        for slot, valor in presentes.items()
+    )
+    return presentes, faltantes, dentro
+
+
+def pick_in_window(inicio: str, fim: str) -> int:
+    comeco, fim_min = to_minutes(inicio), to_minutes(fim)
+    opcoes = [m for m in range(comeco, fim_min + 1) if m % 60 != 0]
+    return random.choice(opcoes) if opcoes else (comeco + fim_min) // 2
+
+
+def fix_total(valores: dict[int, int], faltantes: list[int], piso: int) -> dict[int, int]:
+    total = total_worked(valores)
+    if piso <= total <= WORK_MAX_MINUTES:
+        return valores
+    alvo = min(max(total, piso), WORK_MAX_MINUTES)
+    delta = alvo - total
+    for slot in faltantes:
+        candidato = valores[slot] + slot_sign(slot) * delta
+        if candidato % 60 == 0:
+            continue
+        teste = dict(valores)
+        teste[slot] = candidato
+        if piso <= total_worked(teste) <= WORK_MAX_MINUTES:
+            return teste
+    return valores
+
+
+def avoid_round(valores: dict[int, int], faltantes: list[int], piso: int) -> dict[int, int]:
+    for slot in faltantes:
+        if valores[slot] % 60 != 0:
+            continue
+        for desloc in (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7):
+            teste = dict(valores)
+            teste[slot] = valores[slot] + desloc
+            if piso <= total_worked(teste) <= WORK_MAX_MINUTES:
+                valores[slot] = teste[slot]
+                break
+        else:
+            log(f"slot {slot}: nao foi possivel evitar hora fechada em {to_clock(valores[slot])}")
+    return valores
+
+
+def slot_sign(slot: int) -> int:
+    return 1 if slot % 2 == 0 else -1
+
+
+def total_worked(valores: dict[int, int]) -> int:
+    total = 0
+    for entrada in sorted(valores)[::2]:
+        saida = entrada + 1
+        if entrada in valores and saida in valores:
+            total += valores[saida] - valores[entrada]
+    return total
+
+
+def split_marks(marks: list[str], windows: dict) -> tuple[dict[int, int], list[int]]:
+    presentes: dict[int, int] = {}
+    faltantes: list[int] = []
+    usados: set[str] = set()
+    for slot in sorted(windows):
+        inicio, fim = windows[slot]
+        achou = None
+        for marca in marks:
+            if marca in usados:
+                continue
+            if to_minutes(inicio) <= to_minutes(marca) <= to_minutes(fim):
+                achou = marca
+                break
+        if achou is None:
+            faltantes.append(slot)
+        else:
+            usados.add(achou)
+            presentes[slot] = to_minutes(achou)
+    return presentes, faltantes
+
+
+def plan_values(marks: list[str], windows: dict) -> tuple[dict[int, int], int, bool]:
+    presentes, faltantes, nas_janelas = assign_slots(marks, windows)
+    if not faltantes:
+        return {}, total_worked(presentes), nas_janelas
+
+    piso = WORK_MIN_MINUTES if nas_janelas else WORK_RELAXED_MIN_MINUTES
+    valores = dict(presentes)
+    for slot in faltantes:
+        valores[slot] = pick_in_window(*windows[slot])
+
+    total = total_worked(valores)
+    if not nas_janelas or not piso <= total <= WORK_MAX_MINUTES:
+        alvo = random.randint(piso, WORK_MAX_MINUTES)
+        passo = (alvo - total) / len(faltantes)
+        for slot in faltantes:
+            valores[slot] = round(valores[slot] + slot_sign(slot) * passo)
+
+    valores = avoid_round(valores, faltantes, piso)
+    valores = fix_total(valores, faltantes, piso)
+    return {slot: valores[slot] for slot in faltantes}, total_worked(valores), nas_janelas
+
+
+def out_of_order(valores: dict[int, int]) -> bool:
+    ordenados = [valores[s] for s in sorted(valores)]
+    return any(a >= b for a, b in zip(ordenados, ordenados[1:]))
 
 
 def previous_business_day(referencia: datetime) -> datetime:
@@ -341,7 +576,7 @@ def main() -> int:
             channel="chrome",
             headless=not args.show,
             no_viewport=True,
-            args=["--start-maximized"],
+            args=["--start-maximizedS"],
         )
         page = None
         try:
@@ -458,6 +693,44 @@ def main() -> int:
                 daily_entry.click(timeout=ACTION_TIMEOUT_MS)
                 log("apontamento diario aberto")
                 page.wait_for_timeout(CLICK_DELAY_MS)
+            combo = page.locator(TOOLBAR_COMBO_TRIGGER).first
+            try:
+                combo.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                log("combo da toolbar nao encontrado")
+                save_evidence(page, "erro-combo-toolbar")
+            else:
+                page.wait_for_timeout(COMBO_OPEN_DELAY_MS)
+                combo.click(timeout=ACTION_TIMEOUT_MS)
+                meses = page.locator(TOOLBAR_COMBO_ITEM).filter(
+                    has_text=TOOLBAR_COMBO_MONTH
+                )
+                ultimo_mes = meses.last
+                try:
+                    ultimo_mes.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    log("nenhum mes encontrado na lista do combo")
+                    save_evidence(page, "erro-combo-mes")
+                else:
+                    total = meses.count()
+                    rotulos = [meses.nth(i).inner_text().strip() for i in range(total)]
+                    log(f"combo: {total} meses na lista - {rotulos}")
+                    escolhido = rotulos[-1]
+                    ultimo_mes.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT_MS)
+                    ultimo_mes.click(timeout=ACTION_TIMEOUT_MS)
+                    page.wait_for_timeout(CLICK_DELAY_MS)
+                    atual = page.locator(TOOLBAR_COMBO_INPUT).input_value()
+                    log(f"combo: clicado {escolhido!r}, campo ficou {atual!r}")
+                    if atual.strip() != escolhido:
+                        log("combo: o clique nao mudou o campo - tentando pelo teclado")
+                        page.locator(TOOLBAR_COMBO_INPUT).click(timeout=ACTION_TIMEOUT_MS)
+                        page.wait_for_timeout(CLICK_DELAY_MS)
+                        for _ in range(total):
+                            page.keyboard.press("ArrowDown")
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(CLICK_DELAY_MS)
+                        atual = page.locator(TOOLBAR_COMBO_INPUT).input_value()
+                        log(f"combo: apos o teclado o campo ficou {atual!r}")
             alvo = args.date or previous_business_day(datetime.now())
             dia = alvo.strftime("%d/%m")
             log(f"verificando {dia} ({alvo.strftime('%A')})")
@@ -472,27 +745,111 @@ def main() -> int:
             else:
                 marks = MARK_PATTERN.findall(dia_row.inner_text())
                 log(f"marcacoes de {dia}: {marks or 'nenhuma'}")
-                faltantes = []
-                for indice in sorted(args.exp_windows):
-                    inicio, fim_janela = args.exp_windows[indice]
-                    presente = any(
-                        to_minutes(inicio) <= to_minutes(marca) <= to_minutes(fim_janela)
-                        for marca in marks
-                    )
-                    if not presente:
-                        faltantes.append((inicio, fim_janela))
-                if faltantes:
-                    rotulos = [f"{ini}-{fim_j}" for ini, fim_j in faltantes]
-                    log(f"Falta apontamentos: [{join_pt(rotulos)}]")
-                    for posicao, valor in plan_fill(marks, faltantes):
-                        log(f"preenchimento planejado: celula {posicao + 1} <- {valor}")
-                else:
+                plano, total, nas_janelas = plan_values(marks, args.exp_windows)
+                if not plano:
                     log(f"dia {dia} completo: {len(args.exp_windows)} apontamentos")
-
-            
-                
-
-            input("Continuar")
+                else:
+                    rotulos = [
+                        f"{args.exp_windows[slot][0]}-{args.exp_windows[slot][1]}"
+                        for slot in sorted(plano)
+                    ]
+                    log(f"Falta apontamentos: [{join_pt(rotulos)}]")
+                    if nas_janelas:
+                        piso = WORK_MIN_MINUTES
+                        log("marcacoes existentes dentro das janelas")
+                    else:
+                        piso = WORK_RELAXED_MIN_MINUTES
+                        log("marcacoes existentes fora das janelas - --exp-windows ignorado")
+                    log(
+                        f"jornada projetada: {to_clock(total)} "
+                        f"(alvo {to_clock(piso)}-{to_clock(WORK_MAX_MINUTES)})"
+                    )
+                    celulas = dia_row.locator(GRID_ROW_DATE_CELL)
+                    inicio_horas = celulas.count() - GRID_TIME_CELLS
+                    posicao = inicio_horas + len(marks)
+                    for slot in sorted(plano):
+                        valor = to_clock(plano[slot])
+                        celula = celulas.nth(posicao)
+                        inner = celula.locator(GRID_CELL_INNER).first
+                        log(f"preenchendo celula {posicao - inicio_horas + 1} com {valor}")
+                        editor = open_cell_editor(page, celula, inner)
+                        if editor is None:
+                            log("editor da celula nao abriu por nenhum caminho")
+                            probe_editor(page, "apos as tentativas")
+                            save_evidence(page, "erro-editor-celula")
+                            save_dump(page, "editor-celula")
+                            break
+                        editor.fill(valor)
+                        page.wait_for_timeout(CLICK_DELAY_MS)
+                        if check_modal(page, f"apos digitar {valor}"):
+                            break
+                        posicao += 1
+                    else:
+                        salvar = page.locator(SAVE_BUTTON).first
+                        try:
+                            salvar.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                        except PlaywrightTimeoutError:
+                            log("botao Salvar nao encontrado")
+                            save_evidence(page, "erro-salvar")
+                        else:
+                            salvar.click(timeout=ACTION_TIMEOUT_MS)
+                            log("Salvar clicado")
+                            page.wait_for_timeout(CLICK_DELAY_MS)
+                            check_modal(page, "apos salvar")
+                            justif = page.locator(JUSTIF_GENERAL_TRIGGER).first
+                            try:
+                                justif.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                            except PlaywrightTimeoutError:
+                                log("tela de justificativa nao apareceu")
+                                save_evidence(page, "erro-justificativa")
+                            else:
+                                justif.click(timeout=ACTION_TIMEOUT_MS)
+                                log("justificativa geral: lista aberta")
+                                page.wait_for_timeout(200)
+                                opcao = page.locator(JUSTIF_OPTION).first
+                                try:
+                                    opcao.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                                except PlaywrightTimeoutError:
+                                    log(f"opcao {JUSTIF_VALUE!r} nao encontrada na lista")
+                                    save_evidence(page, "erro-justificativa-opcao")
+                                else:
+                                    opcao.click(timeout=ACTION_TIMEOUT_MS)
+                                    page.wait_for_timeout(CLICK_DELAY_MS)
+                                    atual = page.locator(JUSTIF_GENERAL_INPUT).first.input_value()
+                                    log(f"justificativa geral: clicado {JUSTIF_VALUE!r}, campo ficou {atual!r}")
+                                    obs = page.locator(JUSTIF_OBS_INPUT).first
+                                    try:
+                                        obs.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                                    except PlaywrightTimeoutError:
+                                        log("campo Observacao Geral nao encontrado")
+                                        save_evidence(page, "erro-observacao-geral")
+                                    else:
+                                        obs.click(timeout=ACTION_TIMEOUT_MS)
+                                        obs.fill(JUSTIF_OBS_TEXT)
+                                        page.wait_for_timeout(CLICK_DELAY_MS)
+                                        log(f"observacao geral: {obs.input_value()!r}")
+                                    botoes = page.locator(JUSTIF_SAVE_BUTTON)
+                                    log(f"botoes Salvar visiveis: {botoes.count()}")
+                                    salvar_justif = botoes.last
+                                    try:
+                                        salvar_justif.wait_for(
+                                            state="visible", timeout=ACTION_TIMEOUT_MS
+                                        )
+                                    except PlaywrightTimeoutError:
+                                        log("botao Salvar da justificativa nao encontrado")
+                                        save_evidence(page, "erro-salvar-justificativa")
+                                    else:
+                                        salvar_justif.click(timeout=ACTION_TIMEOUT_MS)
+                                        log("Salvar da justificativa clicado")
+                                        page.wait_for_timeout(CLICK_DELAY_MS)
+                                        check_modal(page, "apos salvar justificativa")
+                                        if check_save_error(page):
+                                            log("nao salvou - sem permissao para gravar")
+                                            save_evidence(page, "erro-sem-permissao")
+                                            return SANITY_FAILED
+                                        save_evidence(page, "justificativa-salva")
+                            depois = MARK_PATTERN.findall(dia_row.inner_text())
+                            log(f"marcacoes de {dia} apos salvar: {depois}")
         except Exception as exc:
             detalhe = str(exc).splitlines()[0] if str(exc) else ""
             log(f"erro nao previsto: {exc.__class__.__name__}: {detalhe}")
