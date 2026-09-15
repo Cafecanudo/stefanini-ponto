@@ -1,8 +1,13 @@
 # Action Runner — Portal Horas Stefanini
 
-Automação de um único run: abre o portal, verifica se a marcação de ponto do horário
-esperado já existe e, se não existir, registra. Não agenda, não faz loop, não fica vivo.
-O agendamento é responsabilidade de quem chama o script.
+Dois scripts de um único run cada, sobre o mesmo portal:
+
+| Script | O que faz |
+|---|---|
+| `entrypoint.py` | bate o ponto de **hoje**, se ainda não existir marcação na janela do turno |
+| `re_entrypoint.py` | confere um **dia passado** e preenche as marcações que faltaram, com justificativa |
+
+Nenhum dos dois agenda nem fica vivo — quem agenda é o `scheduler.py`.
 
 Alvo: Apdata Global Antares (frontend ExtJS) atrás de SSO SAML com Entra ID.
 
@@ -43,7 +48,7 @@ Se a senha contiver `$`, use aspas simples para evitar interpolação do PowerSh
 Com qualquer uma das duas ausente, o script informa no log e não tenta autenticar — não
 submete campo vazio, o que evitaria bloqueio de conta por tentativas inválidas.
 
-## Uso
+## entrypoint.py — batida do dia
 
 ```powershell
 .venv\Scripts\python.exe action_runner\entrypoint.py --current-exe 2
@@ -88,7 +93,7 @@ explícita, antes de abrir o Chrome.
 Valores malformados são rejeitados na entrada: `HH:MM` fora de faixa, início depois do fim,
 índice não numérico, item sem `=` ou sem `-`.
 
-## Fluxo
+### Fluxo do entrypoint.py
 
 ```
 abre o portal
@@ -112,6 +117,78 @@ A linha do dia é localizada pelo texto `dd/mm` na célula de data, não por ín
 `data-recordid` — ambos mudam conforme o período carregado. Os horários são extraídos por
 regex `\b\d{2}:\d{2}\b` sobre o texto da linha inteira, sem depender de qual coluna
 (`E1`/`S1`/`E2`/`S2`...) está preenchida.
+
+## re_entrypoint.py — conferência e correção de um dia passado
+
+```powershell
+.venv\Scripts\python.exe action_runner\re_entrypoint.py
+.venv\Scripts\python.exe action_runner\re_entrypoint.py --date 11/09 --show
+```
+
+| Parâmetro | Default | Descrição |
+|---|---|---|
+| `--date` | dia útil anterior | Data a conferir, `dd/mm` ou `dd/mm/aaaa` |
+| `--show` | `false` | Mostra a janela do Chrome |
+| `--exp-windows` | as mesmas janelas do `entrypoint.py` | Janelas de horário esperadas |
+
+Sem `--date`, volta um dia e continua voltando enquanto cair em sábado ou domingo.
+**Feriado não é tratado**: na segunda após um feriado na sexta, ele confere a sexta e
+acusa tudo faltando. Com `--date`, a regra de dia útil não se aplica — `--date 12/09`
+confere o sábado como pedido.
+
+### Como decide o que falta
+
+Cada marcação existente é atribuída ao slot cuja janela está mais próxima, preservando a
+ordem cronológica e minimizando a distância total. Isso resolve o caso em que duas
+marcações caem na mesma janela:
+
+| Marcações do dia | Slots atribuídos | Falta |
+|---|---|---|
+| `13:49, 14:10, 17:47` | 2, 3, 4 | 1 (entrada da manhã) |
+| `08:57, 13:04, 13:58` | 1, 2, 3 | 4 |
+| `08:57, 18:02` | 1, 4 | 2 e 3 |
+
+O casamento simples por janela colocaria `13:49` no slot 3 e deixaria `14:10` órfão, fora
+do cálculo da jornada.
+
+### Como calcula os horários
+
+O valor é **sorteado** dentro da janela, nunca em hora fechada (`13:00`, `14:00`).
+Depois a jornada total é conferida:
+
+| Situação | Jornada exigida |
+|---|---|
+| Todas as marcações existentes caem nas janelas | 08:00 – 08:15 |
+| Alguma marcação fora das janelas | `--exp-windows` é ignorado, 07:50 – 08:15 |
+
+Quando a soma sai do intervalo, os horários faltantes são recalculados para caber nele —
+mesmo que isso os leve para fora das janelas. A jornada tem prioridade sobre a janela.
+
+### Onde escreve
+
+As células vazias ficam sempre no fim da linha, então a primeira a preencher é
+`len(marcações)`. As de horário são as **8 últimas** `td` das 13 da linha — os
+`data-columnid` não servem de âncora, mudaram de `gridcolumn-1147` para `gridcolumn-1146`
+entre duas capturas.
+
+### Fluxo
+
+```
+Apontamento Diário
+  └ seleciona o último mês do combo
+  └ localiza a linha do dia
+  └ para cada célula faltante: duplo-clique → digita (sem Enter)
+  └ Salvar
+  └ Justificativa geral → "Serviço Externo"
+  └ Observação Geral → "Serviço externo nao estava acessivel"
+  └ Salvar
+```
+
+Se aparecer a janela de erro (botão `btPesquisaErro` ou título "Erro"), significa que o
+usuário não tem permissão para gravar: registra o texto no log, salva evidência e encerra
+com `SANITY_FAILED`. Nenhum ajuste de seletor resolve isso — é perfil de acesso no Apdata.
+
+Só esse caminho e o sucesso mudam o exit code; o resto termina em `0`.
 
 ## Autenticação
 
@@ -191,3 +268,9 @@ seletor quebrar, a primeira verificação é se essa versão mudou.
    com a janela começando 08:45 — é lida como ausente, e o script bate de novo. A dupla
    verificação imediatamente antes do clique, prevista na spec, não existe: há dois cliques
    e uma navegação entre a leitura e a ação.
+5. **O `re_entrypoint.py` escreve no espelho de ponto.** Não há dry-run: rodar com uma data
+   que tenha marcação faltando preenche e salva de verdade.
+6. **Feriado não é tratado** no cálculo do dia útil anterior.
+7. **O combo seleciona o último mês da lista**, que pode ser um mês futuro. Se a grid mudar
+   para um mês onde a data procurada não existe, o script acusa a linha como não
+   encontrada.
