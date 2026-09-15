@@ -27,6 +27,7 @@ WAIT_LOGIN_WINDOW_MS = 8000
 MFA_TIMEOUT_MS = 60000
 POLL_INTERVAL_MS = 500
 CLICK_DELAY_MS = 800
+COMBO_OPEN_DELAY_MS = 2500
 APP_READY_TIMEOUT_MS = 60000
 
 CONSENT_BUTTON = "text=Confirmar preferências"
@@ -57,6 +58,11 @@ KMSI_CHECKBOX = 'input[name="DontShowAgain"], #KmsiCheckboxField'
 KMSI_YES_BUTTON = 'input[type="submit"]#idSIButton9, input[type="submit"][value="Sim"]'
 WORKAREA_BUTTON = "a.sidebarButtons.workarea"
 DAILY_ENTRY_BUTTON = "text=Apontamento Diário"
+TOOLBAR_COMBO_ID = "combotoolbar-1036_1"
+TOOLBAR_COMBO_INPUT = f"#{TOOLBAR_COMBO_ID}-inputEl"
+TOOLBAR_COMBO_TRIGGER = f"#{TOOLBAR_COMBO_ID}-trigger-picker"
+TOOLBAR_COMBO_ITEM = ".x-boundlist:visible .x-boundlist-item"
+TOOLBAR_COMBO_MONTH = re.compile(r"^\d{2} - ")
 GRID_ROW = "tr.x-grid-row"
 GRID_ROW_DATE_CELL = "td"
 GRID_ROW_CHECKBOX = "div.x-grid-row-checker"
@@ -424,6 +430,32 @@ def main() -> int:
                 daily_entry.click(timeout=ACTION_TIMEOUT_MS)
                 log("apontamento diario aberto")
                 page.wait_for_timeout(CLICK_DELAY_MS)
+            combo = page.locator(TOOLBAR_COMBO_TRIGGER).first
+            try:
+                combo.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                log("combo da toolbar nao encontrado")
+                save_evidence(page, "erro-combo-toolbar")
+            else:
+                page.wait_for_timeout(COMBO_OPEN_DELAY_MS)
+                combo.click(timeout=ACTION_TIMEOUT_MS)
+                meses = page.locator(TOOLBAR_COMBO_ITEM).filter(
+                    has_text=TOOLBAR_COMBO_MONTH
+                )
+                ultimo_mes = meses.last
+                try:
+                    ultimo_mes.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    log("nenhum mes encontrado na lista do combo")
+                    save_evidence(page, "erro-combo-mes")
+                else:
+                    total = meses.count()
+                    escolhido = ultimo_mes.inner_text().strip()
+                    ultimo_mes.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT_MS)
+                    ultimo_mes.click(timeout=ACTION_TIMEOUT_MS)
+                    page.wait_for_timeout(CLICK_DELAY_MS)
+                    atual = page.locator(TOOLBAR_COMBO_INPUT).input_value()
+                    log(f"combo: {total} meses, selecionado {escolhido!r}, campo ficou {atual!r}")
             today = datetime.now().strftime("%d/%m")
             today_row = page.locator(GRID_ROW).filter(
                 has=page.locator(GRID_ROW_DATE_CELL, has_text=re.compile(rf"^{today}\s"))
